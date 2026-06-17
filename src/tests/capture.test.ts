@@ -38,6 +38,7 @@ function resolveGodotPath(): string | null {
     win32: [
       'C:\\Program Files\\Godot\\Godot.exe',
       'C:\\Program Files (x86)\\Godot\\Godot.exe',
+      'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe',
     ],
     linux: ['godot4', 'godot'],
   };

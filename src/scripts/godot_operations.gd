@@ -1214,7 +1214,7 @@ func _capture_screenshot_async(params: Dictionary) -> void:
             log_error("Failed to load scene: " + scene_path)
             quit(1)
             return
-        get_tree().change_scene_to_packed(packed)
+        change_scene_to_packed(packed)
     else:
         var main_scene: String = ProjectSettings.get_setting("application/run/main_scene", "")
         if main_scene == "":
@@ -1226,10 +1226,10 @@ func _capture_screenshot_async(params: Dictionary) -> void:
             log_error("Failed to load main scene: " + main_scene)
             quit(1)
             return
-        get_tree().change_scene_to_packed(packed)
+        change_scene_to_packed(packed)
 
     for _i in range(wait_frames):
-        await get_tree().process_frame
+        await process_frame
 
     await RenderingServer.frame_post_draw
 
@@ -1239,7 +1239,6 @@ func _capture_screenshot_async(params: Dictionary) -> void:
         quit(1)
         return
 
-    img.flip_y()
     var err = img.save_png(output_path)
     if err != OK:
         log_error("Failed to save PNG to: " + output_path + " (error " + str(err) + ")")
@@ -1274,11 +1273,11 @@ func _capture_scene_screenshot_async(params: Dictionary) -> void:
         return
 
     var instance = packed.instantiate()
-    get_tree().root.add_child(instance)
+    root.add_child(instance)
 
     # Two frames: one for _ready(), one for layout to settle.
-    await get_tree().process_frame
-    await get_tree().process_frame
+    await process_frame
+    await process_frame
     await RenderingServer.frame_post_draw
 
     var img: Image = root.get_texture().get_image()
@@ -1287,7 +1286,6 @@ func _capture_scene_screenshot_async(params: Dictionary) -> void:
         quit(1)
         return
 
-    img.flip_y()
     var err = img.save_png(output_path)
     if err != OK:
         log_error("Failed to save PNG to: " + output_path + " (error " + str(err) + ")")

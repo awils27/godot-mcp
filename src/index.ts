@@ -303,6 +303,7 @@ class GodotServer {
         'C:\\Program Files (x86)\\Godot\\Godot.exe',
         'C:\\Program Files\\Godot_4\\Godot.exe',
         'C:\\Program Files (x86)\\Godot_4\\Godot.exe',
+        'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe',
         `${process.env.USERPROFILE}\\Godot\\Godot.exe`
       );
     } else if (osPlatform === 'linux') {
