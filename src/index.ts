@@ -70,6 +70,8 @@ class GodotServer {
   private strictPathValidation: boolean = false;
   // In-memory log buffer for editor console output (shared across launch/run)
   private editorLogLines: string[] = [];
+  // Track the editor process spawned by launch_editor so quit_godot can close it
+  private editorProcess: any = null;
 
   /**
    * Parameter name mappings between snake_case and camelCase
@@ -399,6 +401,13 @@ class GodotServer {
       this.logDebug('Killing active Godot process');
       this.activeProcess.process.kill();
       this.activeProcess = null;
+    }
+    if (this.editorProcess) {
+      this.logDebug('Killing tracked editor process');
+      try {
+        this.editorProcess.kill();
+      } catch (_) {}
+      this.editorProcess = null;
     }
     await this.server.close();
   }
@@ -938,6 +947,15 @@ class GodotServer {
             },
           },
         },
+        {
+          name: 'quit_godot',
+          description: 'Close the Godot editor that was launched by this MCP server via launch_editor. Only closes editors spawned by this server.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        },
       ],
     }));
 
@@ -975,6 +993,8 @@ class GodotServer {
           return await this.handleUpdateProjectUids(request.params.arguments);
         case 'view_log':
           return await this.handleViewLog(request.params.arguments);
+        case 'quit_godot':
+          return await this.handleQuitGodot();
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
@@ -1073,6 +1093,16 @@ class GodotServer {
           }
         });
       }
+
+      // Track the spawned editor so quit_godot can close it later
+      this.editorProcess = process;
+
+      process.on('exit', () => {
+        if (this.editorProcess === process) {
+          this.logDebug('Godot editor exited naturally');
+          this.editorProcess = null;
+        }
+      });
 
       process.on('error', (err: Error) => {
         console.error('Failed to start Godot editor:', err);
@@ -2246,6 +2276,40 @@ class GodotServer {
         ]
       );
     }
+  }
+
+  /**
+   * Handle the quit_godot tool
+   */
+  private async handleQuitGodot() {
+    if (!this.editorProcess) {
+      return this.createErrorResponse(
+        'No Godot editor process is currently tracked',
+        ['The editor may have been closed already, or launch_editor was not used to start it']
+      );
+    }
+
+    try {
+      this.logDebug('Quitting Godot editor');
+      this.editorProcess.kill();
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return this.createErrorResponse(
+        `Failed to quit Godot editor: ${errorMessage}`,
+        ['The process may have already exited']
+      );
+    } finally {
+      this.editorProcess = null;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: 'Godot editor closed successfully.',
+        },
+      ],
+    };
   }
 
   /**
