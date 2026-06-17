@@ -22,6 +22,16 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { handleCaptureScreenshot, handleCaptureSceneScreenshot } from './tools/capture.js';
+import {
+  type OperationParams,
+  PARAMETER_MAPPINGS,
+  buildReverseParameterMappings,
+  convertCamelToSnakeCase,
+  isGodot44OrLater,
+  normalizeParameters,
+  validateClassName,
+  validatePath,
+} from './utils/server-utils.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -53,13 +63,6 @@ interface GodotServerConfig {
 }
 
 /**
- * Interface for operation parameters
- */
-interface OperationParams {
-  [key: string]: any;
-}
-
-/**
  * Main server class for the Godot MCP server
  */
 class GodotServer {
@@ -78,25 +81,7 @@ class GodotServer {
    * Parameter name mappings between snake_case and camelCase
    * This allows the server to accept both formats
    */
-  private parameterMappings: Record<string, string> = {
-    'project_path': 'projectPath',
-    'scene_path': 'scenePath',
-    'root_node_type': 'rootNodeType',
-    'parent_node_path': 'parentNodePath',
-    'node_type': 'nodeType',
-    'node_name': 'nodeName',
-    'texture_path': 'texturePath',
-    'node_path': 'nodePath',
-    'output_path': 'outputPath',
-    'mesh_item_names': 'meshItemNames',
-    'new_path': 'newPath',
-    'file_path': 'filePath',
-    'directory': 'directory',
-    'recursive': 'recursive',
-    'scene': 'scene',
-    'wait_frames': 'waitFrames',
-    'timeout_ms': 'timeoutMs',
-  };
+  private parameterMappings: Record<string, string> = PARAMETER_MAPPINGS;
 
   /**
    * Reverse mapping from camelCase to snake_case
@@ -106,9 +91,7 @@ class GodotServer {
 
   constructor(config?: GodotServerConfig) {
     // Initialize reverse parameter mappings
-    for (const [snakeCase, camelCase] of Object.entries(this.parameterMappings)) {
-      this.reverseParameterMappings[camelCase] = snakeCase;
-    }
+    this.reverseParameterMappings = buildReverseParameterMappings(this.parameterMappings);
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
     let godotDebugMode = GODOT_DEBUG_MODE;
@@ -212,13 +195,7 @@ class GodotServer {
    * Validate a path to prevent path traversal attacks
    */
   private validatePath(path: string): boolean {
-    // Basic validation to prevent path traversal
-    if (!path || path.includes('..')) {
-      return false;
-    }
-
-    // Add more validation as needed
-    return true;
+    return validatePath(path);
   }
 
   /**
@@ -227,8 +204,7 @@ class GodotServer {
    * Rejects anything that looks like a path (res://, absolute paths, dots, slashes, colons).
    */
   private validateClassName(name: string): boolean {
-    if (!name) return false;
-    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+    return validateClassName(name);
   }
 
   /**
@@ -421,13 +397,7 @@ class GodotServer {
    * @returns True if the version is 4.4 or later
    */
   private isGodot44OrLater(version: string): boolean {
-    const match = version.match(/^(\d+)\.(\d+)/);
-    if (match) {
-      const major = parseInt(match[1], 10);
-      const minor = parseInt(match[2], 10);
-      return major > 4 || (major === 4 && minor >= 4);
-    }
-    return false;
+    return isGodot44OrLater(version);
   }
 
   /**
@@ -436,31 +406,7 @@ class GodotServer {
    * @returns Object with all keys in camelCase format
    */
   private normalizeParameters(params: OperationParams): OperationParams {
-    if (!params || typeof params !== 'object') {
-      return params;
-    }
-    
-    const result: OperationParams = {};
-    
-    for (const key in params) {
-      if (Object.prototype.hasOwnProperty.call(params, key)) {
-        let normalizedKey = key;
-        
-        // If the key is in snake_case, convert it to camelCase using our mapping
-        if (key.includes('_') && this.parameterMappings[key]) {
-          normalizedKey = this.parameterMappings[key];
-        }
-        
-        // Handle nested objects recursively
-        if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
-          result[normalizedKey] = this.normalizeParameters(params[key] as OperationParams);
-        } else {
-          result[normalizedKey] = params[key];
-        }
-      }
-    }
-    
-    return result;
+    return normalizeParameters(params, this.parameterMappings);
   }
 
   /**
@@ -469,23 +415,7 @@ class GodotServer {
    * @returns Object with snake_case keys
    */
   private convertCamelToSnakeCase(params: OperationParams): OperationParams {
-    const result: OperationParams = {};
-    
-    for (const key in params) {
-      if (Object.prototype.hasOwnProperty.call(params, key)) {
-        // Convert camelCase to snake_case
-        const snakeKey = this.reverseParameterMappings[key] || key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-        
-        // Handle nested objects recursively
-        if (typeof params[key] === 'object' && params[key] !== null && !Array.isArray(params[key])) {
-          result[snakeKey] = this.convertCamelToSnakeCase(params[key] as OperationParams);
-        } else {
-          result[snakeKey] = params[key];
-        }
-      }
-    }
-    
-    return result;
+    return convertCamelToSnakeCase(params, this.reverseParameterMappings);
   }
 
   /**

@@ -209,9 +209,12 @@ git clone https://github.com/Coding-Solo/godot-mcp.git
 cd godot-mcp
 npm install
 npm run build
+npm test
 ```
 
 Then point your MCP client to `build/index.js` instead of using `npx`.
+
+The test suite uses Node's built-in test runner and currently focuses on the server's validation and parameter-conversion helpers, which are high-value regression points for path safety and tool argument handling.
 
 </details>
 
