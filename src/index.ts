@@ -1838,7 +1838,7 @@ class GodotServer {
       // Clear the log buffer on each new launch
       this.editorLogLines.clear();
 
-      const process = spawn(godotPath, ['-e', '--path', args.projectPath], {
+      const process = spawn(godotPath, ['--log-file', this.makeGodotTempLogPath(), '-e', '--path', args.projectPath], {
         stdio: 'pipe',
       });
 
@@ -1933,7 +1933,7 @@ class GodotServer {
         }
       }
 
-      const cmdArgs = ['-d', '--path', args.projectPath];
+      const cmdArgs = ['--log-file', this.makeGodotTempLogPath(), '-d', '--path', args.projectPath];
       if (args.scene && this.validatePath(args.scene)) {
         this.logDebug(`Adding scene parameter: ${args.scene}`);
         cmdArgs.push(args.scene);
