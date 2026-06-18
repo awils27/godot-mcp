@@ -9,7 +9,8 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize } from 'path';
-import { existsSync, readdirSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, mkdirSync, readFileSync, cpSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -29,6 +30,7 @@ import {
   getGodotPathCandidates,
 } from './utils/godot-paths.js';
 import { waitForLogReadySignal } from './utils/log-ready.js';
+import { LiveBridgeHost } from './utils/live-bridge.js';
 import { createErrorResponse as buildErrorResponse } from './utils/mcp-response.js';
 import { RingBuffer } from './utils/ring-buffer.js';
 import {
@@ -47,6 +49,10 @@ const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
 const LOG_BUFFER_LIMIT = 2000;
 const PROCESS_OUTPUT_LIMIT = 1000;
+const LIVE_BRIDGE_ADDON_DIR = 'addons/godot_mcp_bridge';
+const LIVE_BRIDGE_PLUGIN_CFG = 'res://addons/godot_mcp_bridge/plugin.cfg';
+const LIVE_BRIDGE_AUTOLOAD_NAME = 'GodotMcpBridge';
+const LIVE_BRIDGE_AUTOLOAD_PATH = 'res://addons/godot_mcp_bridge/bridge_runtime.gd';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,6 +68,7 @@ interface GodotProcess {
   output: RingBuffer<string>;
   errors: RingBuffer<string>;
   launchArgs: Record<string, unknown>;
+  liveBridge: LiveBridgeHost | null;
 }
 
 /**
@@ -309,6 +316,157 @@ class GodotServer {
     return match?.[1] ?? null;
   }
 
+  private makeGodotTempLogPath(): string {
+    return join(tmpdir(), `godot-mcp-${Date.now()}-${Math.random().toString(16).slice(2)}.log`);
+  }
+
+  private getLiveBridgeSourceDir(): string {
+    return join(__dirname, 'addon', 'godot_mcp_bridge');
+  }
+
+  private getLiveBridgeProjectDir(projectPath: string): string {
+    return join(projectPath, LIVE_BRIDGE_ADDON_DIR);
+  }
+
+  private hasLiveBridgeInstalled(projectPath: string): boolean {
+    return existsSync(join(this.getLiveBridgeProjectDir(projectPath), 'plugin.cfg'));
+  }
+
+  private hasLiveBridgePluginEnabled(projectConfig: string): boolean {
+    return projectConfig.includes(LIVE_BRIDGE_PLUGIN_CFG);
+  }
+
+  private hasLiveBridgeAutoloadEnabled(projectConfig: string): boolean {
+    return projectConfig.includes(`${LIVE_BRIDGE_AUTOLOAD_NAME}="*${LIVE_BRIDGE_AUTOLOAD_PATH}"`);
+  }
+
+  private upsertProjectSetting(
+    projectConfig: string,
+    section: string,
+    key: string,
+    value: string | null
+  ): string {
+    const lines = projectConfig.split(/\r?\n/);
+    const sectionHeader = `[${section}]`;
+    let sectionIndex = lines.findIndex((line) => line.trim() === sectionHeader);
+
+    if (sectionIndex === -1) {
+      if (value === null) {
+        return projectConfig.endsWith('\n') ? projectConfig : `${projectConfig}\n`;
+      }
+      const suffix = projectConfig.endsWith('\n') || projectConfig.length === 0 ? '' : '\n';
+      return `${projectConfig}${suffix}${sectionHeader}\n${key}=${value}\n`;
+    }
+
+    let nextSectionIndex = lines.length;
+    for (let index = sectionIndex + 1; index < lines.length; index += 1) {
+      if (lines[index].startsWith('[') && lines[index].endsWith(']')) {
+        nextSectionIndex = index;
+        break;
+      }
+    }
+
+    const existingIndex = lines.findIndex(
+      (line, index) => index > sectionIndex && index < nextSectionIndex && line.startsWith(`${key}=`)
+    );
+
+    if (value === null) {
+      if (existingIndex !== -1) {
+        lines.splice(existingIndex, 1);
+      }
+      return `${lines.join('\n')}\n`;
+    }
+
+    const newLine = `${key}=${value}`;
+    if (existingIndex !== -1) {
+      lines[existingIndex] = newLine;
+    } else {
+      lines.splice(nextSectionIndex, 0, newLine);
+    }
+
+    return `${lines.join('\n')}\n`;
+  }
+
+  private readPackedStringArraySetting(projectConfig: string, section: string, key: string): string[] {
+    const pattern = new RegExp(`\\[${section}\\][\\s\\S]*?^${key}=PackedStringArray\\(([^\\n]*)\\)`, 'm');
+    const match = projectConfig.match(pattern);
+    if (!match?.[1]) {
+      return [];
+    }
+
+    return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+  }
+
+  private writePackedStringArraySetting(
+    projectConfig: string,
+    section: string,
+    key: string,
+    values: string[]
+  ): string {
+    const serializedValues = values.map((value) => `"${value}"`).join(', ');
+    return this.upsertProjectSetting(
+      projectConfig,
+      section,
+      key,
+      `PackedStringArray(${serializedValues})`
+    );
+  }
+
+  private writeProjectConfig(projectPath: string, projectConfig: string): void {
+    writeFileSync(join(projectPath, 'project.godot'), projectConfig, 'utf8');
+  }
+
+  private getLiveBridgeStatusSnapshot(projectPath: string): {
+    installed: boolean;
+    pluginEnabled: boolean;
+    autoloadEnabled: boolean;
+    status: 'not_installed' | 'installed_disabled' | 'enabled_no_runtime_session' | 'connected_ready';
+  } {
+    const installed = this.hasLiveBridgeInstalled(projectPath);
+    if (!installed) {
+      return {
+        installed,
+        pluginEnabled: false,
+        autoloadEnabled: false,
+        status: 'not_installed',
+      };
+    }
+
+    const projectConfig = this.readProjectConfig(projectPath);
+    const pluginEnabled = this.hasLiveBridgePluginEnabled(projectConfig);
+    const autoloadEnabled = this.hasLiveBridgeAutoloadEnabled(projectConfig);
+
+    if (!pluginEnabled || !autoloadEnabled) {
+      return {
+        installed,
+        pluginEnabled,
+        autoloadEnabled,
+        status: 'installed_disabled',
+      };
+    }
+
+    const activeProjectPath = this.activeProcess?.launchArgs.projectPath;
+    if (
+      activeProjectPath === projectPath &&
+      this.activeProcess?.liveBridge &&
+      this.activeProcess.liveBridge.status.connected
+    ) {
+      return {
+        installed,
+        pluginEnabled,
+        autoloadEnabled,
+        status: 'connected_ready',
+      };
+    }
+
+    return {
+      installed,
+      pluginEnabled,
+      autoloadEnabled,
+      status: 'enabled_no_runtime_session',
+    };
+  }
+
   private listScenePaths(projectPath: string): string[] {
     const scenes: string[] = [];
 
@@ -333,6 +491,90 @@ class GodotServer {
     scanDirectory(projectPath);
     scenes.sort();
     return scenes;
+  }
+
+  private async waitForLiveBridgeConnection(liveBridge: LiveBridgeHost, timeoutMs = 5000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (liveBridge.status.connected) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return liveBridge.status.connected;
+  }
+
+  private async withLiveBridgeRequest<T>(
+    projectPath: string,
+    command: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = 3000
+  ): Promise<{ ok: true; payload: T } | { ok: false; response: object }> {
+    const liveStatus = this.getLiveBridgeStatusSnapshot(projectPath);
+    if (liveStatus.status === 'not_installed') {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'Live bridge addon is not installed for this project.',
+          ['Use install_live_bridge first']
+        ),
+      };
+    }
+
+    if (liveStatus.status === 'installed_disabled') {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'Live bridge addon is installed but not enabled for this project.',
+          ['Use enable_live_bridge to enable the addon and autoload entry']
+        ),
+      };
+    }
+
+    if (!this.activeProcess || this.activeProcess.launchArgs.projectPath !== projectPath) {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'The project is not currently running under MCP control.',
+          ['Use run_project or run_scene after enabling the live bridge addon']
+        ),
+      };
+    }
+
+    const liveBridge = this.activeProcess.liveBridge;
+    if (!liveBridge) {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'Live bridge session is not active for the running project.',
+          ['Restart the project after enabling the live bridge addon']
+        ),
+      };
+    }
+
+    const connected = await this.waitForLiveBridgeConnection(liveBridge, timeoutMs);
+    if (!connected) {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'Live bridge runtime did not connect in time.',
+          ['Ensure the addon autoload is enabled and the project started normally']
+        ),
+      };
+    }
+
+    try {
+      const payload = await liveBridge.request<T>(command, params, timeoutMs);
+      return { ok: true, payload };
+    } catch (error: any) {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          `Live bridge request failed: ${error?.message || 'Unknown error'}`,
+          ['Try rerunning the project or reloading the live bridge addon']
+        ),
+      };
+    }
   }
 
   /**
@@ -489,6 +731,9 @@ class GodotServer {
     if (this.activeProcess) {
       this.logDebug('Killing active Godot process');
       this.activeProcess.process.kill();
+      if (this.activeProcess.liveBridge) {
+        await this.activeProcess.liveBridge.close();
+      }
       this.activeProcess = null;
     }
     if (this.editorProcess) {
@@ -566,6 +811,8 @@ class GodotServer {
       // Build argument array for execFile to prevent command injection
       // Using execFile with argument arrays avoids shell interpretation entirely
       const args = [
+        '--log-file',
+        this.makeGodotTempLogPath(),
         '--headless',
         '--path',
         projectPath,  // Safe: passed as argument, not interpolated into shell command
@@ -1025,6 +1272,76 @@ class GodotServer {
           },
         },
         {
+          name: 'install_live_bridge',
+          description: 'Install the optional live inspection addon into a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'enable_live_bridge',
+          description: 'Enable the live inspection addon and runtime autoload for a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'disable_live_bridge',
+          description: 'Disable the live inspection addon and runtime autoload for a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'uninstall_live_bridge',
+          description: 'Remove the optional live inspection addon from a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'get_live_bridge_status',
+          description: 'Get install/enable/runtime status for the optional live inspection addon.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
           name: 'check_scripts',
           description: 'Load GDScript files headlessly to catch parse and static typing errors.',
           inputSchema: {
@@ -1075,6 +1392,118 @@ class GodotServer {
               godotPath: {
                 type: 'string',
                 description: 'Optional per-call override for the Godot executable path.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'get_live_main_scene',
+          description: 'Get the current live main scene from the addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'get_live_scene_tree',
+          description: 'Inspect the live node hierarchy from an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              rootNodePath: {
+                type: 'string',
+                description: 'Optional node path to inspect as a subtree.',
+              },
+              includeOwner: {
+                type: 'boolean',
+                description: 'Include owner paths in returned nodes when available.',
+              },
+              maxNodes: {
+                type: 'number',
+                description: 'Maximum node count to include in the returned tree.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'get_live_node_state',
+          description: 'Inspect a specific live node in an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              nodePath: {
+                type: 'string',
+                description: 'Node path to inspect from the current live scene.',
+              },
+              propertyNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional property names to serialize for the target node.',
+              },
+            },
+            required: ['projectPath', 'nodePath'],
+          },
+        },
+        {
+          name: 'list_live_groups',
+          description: 'List active groups from an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              includeMembers: {
+                type: 'boolean',
+                description: 'Include member node paths for each group.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'capture_debug_state',
+          description: 'Capture a combined live debug snapshot from an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              rootNodePath: {
+                type: 'string',
+                description: 'Optional node path to inspect as the primary subtree.',
+              },
+              propertyNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional property names to serialize for the selected node.',
+              },
+              includeOwner: {
+                type: 'boolean',
+                description: 'Include owner paths in returned nodes when available.',
+              },
+              maxNodes: {
+                type: 'number',
+                description: 'Maximum node count to include in the returned tree.',
               },
             },
             required: ['projectPath'],
@@ -1298,10 +1727,30 @@ class GodotServer {
           return await this.handleGetUid(request.params.arguments);
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
+        case 'install_live_bridge':
+          return await this.handleInstallLiveBridge(request.params.arguments);
+        case 'enable_live_bridge':
+          return await this.handleEnableLiveBridge(request.params.arguments);
+        case 'disable_live_bridge':
+          return await this.handleDisableLiveBridge(request.params.arguments);
+        case 'uninstall_live_bridge':
+          return await this.handleUninstallLiveBridge(request.params.arguments);
+        case 'get_live_bridge_status':
+          return await this.handleGetLiveBridgeStatus(request.params.arguments);
         case 'check_scripts':
           return await this.handleCheckScripts(request.params.arguments);
         case 'get_scene_tree':
           return await this.handleGetSceneTree(request.params.arguments);
+        case 'get_live_main_scene':
+          return await this.handleGetLiveMainScene(request.params.arguments);
+        case 'get_live_scene_tree':
+          return await this.handleGetLiveSceneTree(request.params.arguments);
+        case 'get_live_node_state':
+          return await this.handleGetLiveNodeState(request.params.arguments);
+        case 'list_live_groups':
+          return await this.handleListLiveGroups(request.params.arguments);
+        case 'capture_debug_state':
+          return await this.handleCaptureDebugState(request.params.arguments);
         case 'run_scene':
           return await this.handleRunScene(request.params.arguments);
         case 'reload_project':
@@ -1479,6 +1928,9 @@ class GodotServer {
       if (this.activeProcess) {
         this.logDebug('Killing existing Godot process before starting a new one');
         this.activeProcess.process.kill();
+        if (this.activeProcess.liveBridge) {
+          await this.activeProcess.liveBridge.close();
+        }
       }
 
       const cmdArgs = ['-d', '--path', args.projectPath];
@@ -1487,30 +1939,50 @@ class GodotServer {
         cmdArgs.push(args.scene);
       }
 
+      const liveBridgeStatus = this.getLiveBridgeStatusSnapshot(args.projectPath);
+      let liveBridge: LiveBridgeHost | null = null;
+      let spawnEnv: NodeJS.ProcessEnv = process.env;
+      if (liveBridgeStatus.status !== 'not_installed' && liveBridgeStatus.status !== 'installed_disabled') {
+        liveBridge = new LiveBridgeHost();
+        await liveBridge.start();
+        spawnEnv = {
+          ...process.env,
+          GODOT_MCP_LIVE_HOST: liveBridge.host,
+          GODOT_MCP_LIVE_PORT: String(liveBridge.port),
+          GODOT_MCP_LIVE_TOKEN: liveBridge.token,
+        };
+      }
+
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = spawn(godotPath, cmdArgs, { stdio: 'pipe' });
+      const childProcess = spawn(godotPath, cmdArgs, { stdio: 'pipe', env: spawnEnv });
       const output = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
       const errors = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
-      this.attachProcessStream(process.stdout, 'stdout', output);
-      this.attachProcessStream(process.stderr, 'stderr', errors);
+      this.attachProcessStream(childProcess.stdout, 'stdout', output);
+      this.attachProcessStream(childProcess.stderr, 'stderr', errors);
 
-      process.on('exit', (code: number | null) => {
+      childProcess.on('exit', (code: number | null) => {
         this.logDebug(`Godot process exited with code ${code}`);
-        if (this.activeProcess && this.activeProcess.process === process) {
+        if (this.activeProcess && this.activeProcess.process === childProcess) {
+          if (this.activeProcess.liveBridge) {
+            void this.activeProcess.liveBridge.close();
+          }
           this.activeProcess = null;
         }
       });
 
-      process.on('error', (err: Error) => {
+      childProcess.on('error', (err: Error) => {
         console.error('Failed to start Godot process:', err);
         this.appendLogLine(errors, 'spawn error', err.message);
-        if (this.activeProcess && this.activeProcess.process === process) {
+        if (this.activeProcess && this.activeProcess.process === childProcess) {
+          if (this.activeProcess.liveBridge) {
+            void this.activeProcess.liveBridge.close();
+          }
           this.activeProcess = null;
         }
       });
 
       this.activeProcess = {
-        process,
+        process: childProcess,
         output,
         errors,
         launchArgs: {
@@ -1520,6 +1992,7 @@ class GodotServer {
           waitForLog: args.waitForLog,
           readyTimeoutMs: args.readyTimeoutMs,
         },
+        liveBridge,
       };
 
       if (typeof args.waitForLog === 'string' && args.waitForLog.trim()) {
@@ -1529,7 +2002,7 @@ class GodotServer {
             : 10000;
 
         const waitResult = await waitForLogReadySignal(
-          process,
+          childProcess,
           output,
           errors,
           args.waitForLog,
@@ -1636,6 +2109,9 @@ class GodotServer {
     this.activeProcess.process.kill();
     const output = this.activeProcess.output.toArray();
     const errors = this.activeProcess.errors.toArray();
+    if (this.activeProcess.liveBridge) {
+      await this.activeProcess.liveBridge.close();
+    }
     this.activeProcess = null;
 
     return {
@@ -2524,6 +3000,492 @@ class GodotServer {
     return this.buildEditorLogResponse(args);
   }
 
+  private async handleInstallLiveBridge(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    const sourceDir = this.getLiveBridgeSourceDir();
+    if (!existsSync(join(sourceDir, 'plugin.cfg')) || !existsSync(join(sourceDir, 'bridge_runtime.gd'))) {
+      return this.createErrorResponse(
+        'Live bridge addon assets are missing from the MCP build.',
+        ['Run npm run build to copy addon assets into the build output']
+      );
+    }
+
+    mkdirSync(join(args.projectPath, 'addons'), { recursive: true });
+    cpSync(sourceDir, this.getLiveBridgeProjectDir(args.projectPath), {
+      recursive: true,
+      force: true,
+    });
+
+    const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              message: 'Live bridge addon installed.',
+              ...status,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleEnableLiveBridge(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    if (!this.hasLiveBridgeInstalled(args.projectPath)) {
+      return this.createErrorResponse(
+        'Live bridge addon is not installed for this project.',
+        ['Use install_live_bridge first']
+      );
+    }
+
+    let projectConfig = this.readProjectConfig(args.projectPath);
+    const enabledPlugins = this.readPackedStringArraySetting(projectConfig, 'editor_plugins', 'enabled');
+    if (!enabledPlugins.includes(LIVE_BRIDGE_PLUGIN_CFG)) {
+      enabledPlugins.push(LIVE_BRIDGE_PLUGIN_CFG);
+    }
+    projectConfig = this.writePackedStringArraySetting(
+      projectConfig,
+      'editor_plugins',
+      'enabled',
+      enabledPlugins
+    );
+    projectConfig = this.upsertProjectSetting(
+      projectConfig,
+      'autoload',
+      LIVE_BRIDGE_AUTOLOAD_NAME,
+      `"*${LIVE_BRIDGE_AUTOLOAD_PATH}"`
+    );
+    this.writeProjectConfig(args.projectPath, projectConfig);
+
+    const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              message: 'Live bridge addon enabled.',
+              ...status,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleDisableLiveBridge(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    let projectConfig = this.readProjectConfig(args.projectPath);
+    const enabledPlugins = this
+      .readPackedStringArraySetting(projectConfig, 'editor_plugins', 'enabled')
+      .filter((pluginPath) => pluginPath !== LIVE_BRIDGE_PLUGIN_CFG);
+    projectConfig = this.writePackedStringArraySetting(
+      projectConfig,
+      'editor_plugins',
+      'enabled',
+      enabledPlugins
+    );
+    projectConfig = this.upsertProjectSetting(
+      projectConfig,
+      'autoload',
+      LIVE_BRIDGE_AUTOLOAD_NAME,
+      null
+    );
+    this.writeProjectConfig(args.projectPath, projectConfig);
+
+    const activeProcess = this.activeProcess;
+    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge) {
+      await activeProcess.liveBridge.close();
+      activeProcess.liveBridge = null;
+    }
+
+    const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              message: 'Live bridge addon disabled.',
+              ...status,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleUninstallLiveBridge(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    let projectConfig = this.readProjectConfig(args.projectPath);
+    const enabledPlugins = this
+      .readPackedStringArraySetting(projectConfig, 'editor_plugins', 'enabled')
+      .filter((pluginPath) => pluginPath !== LIVE_BRIDGE_PLUGIN_CFG);
+    projectConfig = this.writePackedStringArraySetting(
+      projectConfig,
+      'editor_plugins',
+      'enabled',
+      enabledPlugins
+    );
+    projectConfig = this.upsertProjectSetting(
+      projectConfig,
+      'autoload',
+      LIVE_BRIDGE_AUTOLOAD_NAME,
+      null
+    );
+    this.writeProjectConfig(args.projectPath, projectConfig);
+
+    rmSync(this.getLiveBridgeProjectDir(args.projectPath), { recursive: true, force: true });
+
+    const activeProcess = this.activeProcess;
+    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge) {
+      await activeProcess.liveBridge.close();
+      activeProcess.liveBridge = null;
+    }
+
+    const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              message: 'Live bridge addon uninstalled.',
+              ...status,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLiveBridgeStatus(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    const activeProcess = this.activeProcess;
+    const runtime =
+      activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge
+        ? activeProcess.liveBridge.status
+        : null;
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              ...status,
+              runtime,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLiveMainScene(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'get_live_main_scene'
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLiveSceneTree(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      rootNodePath: args.rootNodePath,
+      includeOwner: args.includeOwner,
+      maxNodes: args.maxNodes,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'get_live_scene_tree',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLiveNodeState(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath || !args.nodePath) {
+      return this.createErrorResponse(
+        'Project path and node path are required',
+        ['Provide a valid projectPath and nodePath']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      nodePath: args.nodePath,
+      propertyNames: Array.isArray(args.propertyNames) ? args.propertyNames : undefined,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'get_live_node_state',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleListLiveGroups(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      includeMembers: args.includeMembers,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'list_live_groups',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleCaptureDebugState(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      rootNodePath: args.rootNodePath,
+      propertyNames: Array.isArray(args.propertyNames) ? args.propertyNames : undefined,
+      includeOwner: args.includeOwner,
+      maxNodes: args.maxNodes,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'capture_debug_state',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    const payload = { ...result.payload } as Record<string, unknown>;
+    const activeProcess = this.activeProcess;
+    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath) {
+      payload.recentRuntimeLogs = {
+        stdout: activeProcess.output.tail(50),
+        stderr: activeProcess.errors.tail(50),
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(payload, null, 2),
+        },
+      ],
+    };
+  }
+
   /**
    * Handle the run_scene tool
    */
@@ -2568,6 +3530,9 @@ class GodotServer {
     this.logDebug(`Reloading Godot project with launch args: ${JSON.stringify(launchArgs)}`);
 
     this.activeProcess.process.kill();
+    if (this.activeProcess.liveBridge) {
+      await this.activeProcess.liveBridge.close();
+    }
     this.activeProcess = null;
 
     return await this.handleRunProject(launchArgs);
@@ -2746,6 +3711,18 @@ class GodotServer {
         resolved.godotPath
       );
 
+      const result = this.extractJsonResult<{ scene_path: string; tree: unknown }>(stdout);
+      if (result) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       const sceneTreeError = this.buildOperationErrorResponse('Get scene tree', stdout, stderr, [
         'Verify the scene path exists and loads correctly in Godot',
         'Check that rootNodePath points to an existing node in the scene',
@@ -2754,25 +3731,13 @@ class GodotServer {
         return sceneTreeError;
       }
 
-      const result = this.extractJsonResult<{ scene_path: string; tree: unknown }>(stdout);
-      if (!result) {
-        return this.createErrorResponse(
-          'Failed to parse scene tree result from Godot.',
-          [
-            'Check the operation output for unexpected script errors',
-            'Try the scene directly in Godot to verify it loads cleanly',
-          ]
-        );
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
+      return this.createErrorResponse(
+        'Failed to parse scene tree result from Godot.',
+        [
+          'Check the operation output for unexpected script errors',
+          'Try the scene directly in Godot to verify it loads cleanly',
+        ]
+      );
     } catch (error: any) {
       return this.createErrorResponse(
         `Failed to get scene tree: ${error?.message || 'Unknown error'}`,

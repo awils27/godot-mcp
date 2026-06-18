@@ -1,5 +1,7 @@
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { promisify } from 'util';
 
 import { extractGodotErrorDetails, getGodotErrorSolutions } from '../utils/godot-errors.js';
@@ -34,7 +36,13 @@ async function runCaptureOperation(
   config: CaptureConfig,
   execution: CaptureExecutionConfig
 ): Promise<{ ok: true } | { ok: false; response: object }> {
+  const logFilePath = join(
+    tmpdir(),
+    `godot-mcp-capture-${Date.now()}-${Math.random().toString(16).slice(2)}.log`
+  );
   const godotArgs = [
+    '--log-file',
+    logFilePath,
     '--path',
     execution.params.project_path as string,
     '--script',

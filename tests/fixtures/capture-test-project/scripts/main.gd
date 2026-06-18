@@ -1,4 +1,5 @@
 extends Node2D
 
 func _ready() -> void:
-    pass
+    add_to_group("roots")
+    $Player.add_to_group("actors")

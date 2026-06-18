@@ -63,6 +63,9 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
     hide_debug_overlay: true,
     keep_temp_file: true,
     line_count: 25,
+    property_names: ['position', 'scale'],
+    max_nodes: 50,
+    include_members: true,
     properties: {
       root_node_type: 'Node2D',
       child_config: {
@@ -81,6 +84,9 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
     hideDebugOverlay: true,
     keepTempFile: true,
     lineCount: 25,
+    propertyNames: ['position', 'scale'],
+    maxNodes: 50,
+    includeMembers: true,
     properties: {
       rootNodeType: 'Node2D',
       child_config: {
@@ -102,6 +108,9 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
     lineCount: 25,
     hideDebugOverlay: true,
     keepTempFile: true,
+    propertyNames: ['position'],
+    maxNodes: 50,
+    includeMembers: false,
     customFlagName: true,
     properties: {
       nodeName: 'Player',
@@ -121,6 +130,9 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
     line_count: 25,
     hide_debug_overlay: true,
     keep_temp_file: true,
+    property_names: ['position'],
+    max_nodes: 50,
+    include_members: false,
     custom_flag_name: true,
     properties: {
       node_name: 'Player',

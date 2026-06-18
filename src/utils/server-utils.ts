@@ -30,6 +30,9 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   keep_temp_file: 'keepTempFile',
   include_owner: 'includeOwner',
   include_scenes: 'includeScenes',
+  include_members: 'includeMembers',
+  property_names: 'propertyNames',
+  max_nodes: 'maxNodes',
 };
 
 export function buildReverseParameterMappings(
