@@ -217,6 +217,29 @@ test('live bridge tools inspect a running addon-enabled project', async (t) => {
         assert.deepEqual(nodeState.node.properties.position, { x: 320, y: 180 });
         assert.ok(nodeState.node.groups.includes('actors'));
 
+        const propertyList = await callToolJson(client, 'get_live_property_list', {
+          projectPath,
+          nodePath: '.',
+          scriptOnly: true,
+          includeValues: true,
+        });
+        assert.ok(
+          propertyList.properties.some(
+            (property: { name: string; value: string }) =>
+              property.name === 'train_name' && property.value === 'Comet'
+          ),
+          `expected train_name in script property list: ${JSON.stringify(propertyList)}`
+        );
+
+        const scriptVariables = await callToolJson(client, 'get_live_script_variables', {
+          projectPath,
+          nodePath: '.',
+          variableNames: ['train_name', 'runtime_status'],
+        });
+        assert.equal(scriptVariables.script.resourcePath, 'res://scripts/main.gd');
+        assert.equal(scriptVariables.variables.train_name, 'Comet');
+        assert.equal(scriptVariables.variables.runtime_status, 'ready');
+
         const groups = await callToolJson(client, 'list_live_groups', {
           projectPath,
           includeMembers: true,

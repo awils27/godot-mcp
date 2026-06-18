@@ -94,6 +94,10 @@ func _handle_request(message: Dictionary) -> void:
             _send_payload_response(request_id, _get_live_scene_tree_payload(params))
         "get_live_node_state":
             _send_payload_response(request_id, _get_live_node_state_payload(params))
+        "get_live_property_list":
+            _send_payload_response(request_id, _get_live_property_list_payload(params))
+        "get_live_script_variables":
+            _send_payload_response(request_id, _get_live_script_variables_payload(params))
         "list_live_groups":
             _send_response(request_id, true, _list_live_groups_payload(params))
         "capture_debug_state":
@@ -187,6 +191,87 @@ func _serialize_value(value):
         _:
             return str(value)
 
+func _type_name_from_id(type_id: int) -> String:
+    match type_id:
+        TYPE_NIL:
+            return "nil"
+        TYPE_BOOL:
+            return "bool"
+        TYPE_INT:
+            return "int"
+        TYPE_FLOAT:
+            return "float"
+        TYPE_STRING:
+            return "String"
+        TYPE_VECTOR2:
+            return "Vector2"
+        TYPE_VECTOR2I:
+            return "Vector2i"
+        TYPE_RECT2:
+            return "Rect2"
+        TYPE_RECT2I:
+            return "Rect2i"
+        TYPE_VECTOR3:
+            return "Vector3"
+        TYPE_VECTOR3I:
+            return "Vector3i"
+        TYPE_TRANSFORM2D:
+            return "Transform2D"
+        TYPE_VECTOR4:
+            return "Vector4"
+        TYPE_VECTOR4I:
+            return "Vector4i"
+        TYPE_PLANE:
+            return "Plane"
+        TYPE_QUATERNION:
+            return "Quaternion"
+        TYPE_AABB:
+            return "AABB"
+        TYPE_BASIS:
+            return "Basis"
+        TYPE_TRANSFORM3D:
+            return "Transform3D"
+        TYPE_PROJECTION:
+            return "Projection"
+        TYPE_COLOR:
+            return "Color"
+        TYPE_STRING_NAME:
+            return "StringName"
+        TYPE_NODE_PATH:
+            return "NodePath"
+        TYPE_RID:
+            return "RID"
+        TYPE_OBJECT:
+            return "Object"
+        TYPE_CALLABLE:
+            return "Callable"
+        TYPE_SIGNAL:
+            return "Signal"
+        TYPE_DICTIONARY:
+            return "Dictionary"
+        TYPE_ARRAY:
+            return "Array"
+        TYPE_PACKED_BYTE_ARRAY:
+            return "PackedByteArray"
+        TYPE_PACKED_INT32_ARRAY:
+            return "PackedInt32Array"
+        TYPE_PACKED_INT64_ARRAY:
+            return "PackedInt64Array"
+        TYPE_PACKED_FLOAT32_ARRAY:
+            return "PackedFloat32Array"
+        TYPE_PACKED_FLOAT64_ARRAY:
+            return "PackedFloat64Array"
+        TYPE_PACKED_STRING_ARRAY:
+            return "PackedStringArray"
+        TYPE_PACKED_VECTOR2_ARRAY:
+            return "PackedVector2Array"
+        TYPE_PACKED_VECTOR3_ARRAY:
+            return "PackedVector3Array"
+        TYPE_PACKED_COLOR_ARRAY:
+            return "PackedColorArray"
+        _:
+            return str(type_id)
+
 func _collect_property_names(node: Node, requested_names: Array) -> PackedStringArray:
     var names := PackedStringArray()
     if requested_names.size() > 0:
@@ -228,6 +313,40 @@ func _get_node_property_value(node: Node, property_name: String):
 
     return node.get(property_name)
 
+func _get_node_property_entries(node: Node) -> Array[Dictionary]:
+    var entries: Array[Dictionary] = []
+    for property_variant in node.get_property_list():
+        if typeof(property_variant) != TYPE_DICTIONARY:
+            continue
+        entries.append(property_variant)
+    return entries
+
+func _matches_property_filter(property_entry: Dictionary, requested_names: Array) -> bool:
+    if requested_names.is_empty():
+        return true
+    var property_name := String(property_entry.get("name", ""))
+    return requested_names.has(property_name)
+
+func _is_script_property(property_entry: Dictionary) -> bool:
+    var usage := int(property_entry.get("usage", 0))
+    return (usage & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0
+
+func _serialize_property_entry(property_entry: Dictionary, include_value: bool, node: Node) -> Dictionary:
+    var property_name := String(property_entry.get("name", ""))
+    var serialized := {
+        "name": property_name,
+        "type": _type_name_from_id(int(property_entry.get("type", TYPE_NIL))),
+        "typeId": int(property_entry.get("type", TYPE_NIL)),
+        "usage": int(property_entry.get("usage", 0)),
+        "hint": int(property_entry.get("hint", 0)),
+        "hintString": String(property_entry.get("hint_string", "")),
+    }
+    if property_entry.has("class_name"):
+        serialized["className"] = String(property_entry.get("class_name", ""))
+    if include_value:
+        serialized["value"] = _serialize_value(_get_node_property_value(node, property_name))
+    return serialized
+
 func _serialize_node_state(node: Node, params: Dictionary) -> Dictionary:
     var requested_properties: Array = params.get("property_names", [])
     if typeof(requested_properties) != TYPE_ARRAY:
@@ -244,6 +363,74 @@ func _serialize_node_state(node: Node, params: Dictionary) -> Dictionary:
         "path": str(node.get_path()),
         "groups": node.get_groups().map(func(group): return str(group)),
         "properties": properties
+    }
+
+func _get_live_property_list_payload(params: Dictionary) -> Dictionary:
+    var node := _resolve_node(params)
+    if node == null:
+        return {
+            "error": "Target node not found in the live scene tree."
+        }
+
+    var requested_names: Array = params.get("property_names", [])
+    if typeof(requested_names) != TYPE_ARRAY:
+        requested_names = []
+    var include_values := bool(params.get("include_values", false))
+    var script_only := bool(params.get("script_only", false))
+
+    var properties: Array = []
+    for property_entry in _get_node_property_entries(node):
+        if script_only and not _is_script_property(property_entry):
+            continue
+        if not _matches_property_filter(property_entry, requested_names):
+            continue
+        properties.append(_serialize_property_entry(property_entry, include_values, node))
+
+    return {
+        "currentScene": _get_live_main_scene_payload(),
+        "nodePath": str(node.get_path()),
+        "nodeType": node.get_class(),
+        "properties": properties
+    }
+
+func _get_live_script_variables_payload(params: Dictionary) -> Dictionary:
+    var node := _resolve_node(params)
+    if node == null:
+        return {
+            "error": "Target node not found in the live scene tree."
+        }
+
+    var requested_names: Array = params.get("variable_names", params.get("property_names", []))
+    if typeof(requested_names) != TYPE_ARRAY:
+        requested_names = []
+
+    var variable_entries: Array = []
+    var variables := {}
+    for property_entry in _get_node_property_entries(node):
+        if not _is_script_property(property_entry):
+            continue
+        if not _matches_property_filter(property_entry, requested_names):
+            continue
+
+        var serialized_entry := _serialize_property_entry(property_entry, true, node)
+        variable_entries.append(serialized_entry)
+        variables[serialized_entry["name"]] = serialized_entry["value"]
+
+    var script = node.get_script()
+    var script_info = null
+    if script is Script:
+        script_info = {
+            "className": script.get_global_name(),
+            "resourcePath": script.resource_path
+        }
+
+    return {
+        "currentScene": _get_live_main_scene_payload(),
+        "nodePath": str(node.get_path()),
+        "nodeType": node.get_class(),
+        "script": script_info,
+        "variables": variables,
+        "propertyList": variable_entries
     }
 
 func _build_live_scene_tree(node: Node, include_owner: bool, counters: Dictionary) -> Dictionary:

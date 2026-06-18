@@ -1461,6 +1461,60 @@ class GodotServer {
           },
         },
         {
+          name: 'get_live_property_list',
+          description: 'List accessible live properties for a node in an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              nodePath: {
+                type: 'string',
+                description: 'Node path to inspect from the current live scene.',
+              },
+              propertyNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional property names to filter the returned property list.',
+              },
+              includeValues: {
+                type: 'boolean',
+                description: 'Include current serialized values for each returned property.',
+              },
+              scriptOnly: {
+                type: 'boolean',
+                description: 'Only include script-defined properties.',
+              },
+            },
+            required: ['projectPath', 'nodePath'],
+          },
+        },
+        {
+          name: 'get_live_script_variables',
+          description: 'Inspect script-defined live variables for a node in an addon-enabled running project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              nodePath: {
+                type: 'string',
+                description: 'Node path to inspect from the current live scene.',
+              },
+              variableNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional script variable names to include.',
+              },
+            },
+            required: ['projectPath', 'nodePath'],
+          },
+        },
+        {
           name: 'list_live_groups',
           description: 'List active groups from an addon-enabled running project.',
           inputSchema: {
@@ -1747,6 +1801,10 @@ class GodotServer {
           return await this.handleGetLiveSceneTree(request.params.arguments);
         case 'get_live_node_state':
           return await this.handleGetLiveNodeState(request.params.arguments);
+        case 'get_live_property_list':
+          return await this.handleGetLivePropertyList(request.params.arguments);
+        case 'get_live_script_variables':
+          return await this.handleGetLiveScriptVariables(request.params.arguments);
         case 'list_live_groups':
           return await this.handleListLiveGroups(request.params.arguments);
         case 'capture_debug_state':
@@ -3394,6 +3452,74 @@ class GodotServer {
     const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
       args.projectPath,
       'get_live_node_state',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLivePropertyList(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath || !args.nodePath) {
+      return this.createErrorResponse(
+        'Project path and node path are required',
+        ['Provide a valid projectPath and nodePath']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      nodePath: args.nodePath,
+      propertyNames: Array.isArray(args.propertyNames) ? args.propertyNames : undefined,
+      includeValues: args.includeValues,
+      scriptOnly: args.scriptOnly,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'get_live_property_list',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result.payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleGetLiveScriptVariables(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath || !args.nodePath) {
+      return this.createErrorResponse(
+        'Project path and node path are required',
+        ['Provide a valid projectPath and nodePath']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      nodePath: args.nodePath,
+      variableNames: Array.isArray(args.variableNames) ? args.variableNames : undefined,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'get_live_script_variables',
       bridgeParams
     );
     if (!result.ok) {

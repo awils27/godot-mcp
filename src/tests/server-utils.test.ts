@@ -66,6 +66,9 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
     property_names: ['position', 'scale'],
     max_nodes: 50,
     include_members: true,
+    include_values: true,
+    script_only: false,
+    variable_names: ['runtime_status'],
     properties: {
       root_node_type: 'Node2D',
       child_config: {
@@ -87,6 +90,9 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
     propertyNames: ['position', 'scale'],
     maxNodes: 50,
     includeMembers: true,
+    includeValues: true,
+    scriptOnly: false,
+    variableNames: ['runtime_status'],
     properties: {
       rootNodeType: 'Node2D',
       child_config: {
@@ -111,6 +117,9 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
     propertyNames: ['position'],
     maxNodes: 50,
     includeMembers: false,
+    includeValues: true,
+    scriptOnly: true,
+    variableNames: ['runtime_status'],
     customFlagName: true,
     properties: {
       nodeName: 'Player',
@@ -133,6 +142,9 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
     property_names: ['position'],
     max_nodes: 50,
     include_members: false,
+    include_values: true,
+    script_only: true,
+    variable_names: ['runtime_status'],
     custom_flag_name: true,
     properties: {
       node_name: 'Player',

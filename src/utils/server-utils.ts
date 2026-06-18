@@ -33,6 +33,9 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   include_members: 'includeMembers',
   property_names: 'propertyNames',
   max_nodes: 'maxNodes',
+  include_values: 'includeValues',
+  script_only: 'scriptOnly',
+  variable_names: 'variableNames',
 };
 
 export function buildReverseParameterMappings(
