@@ -56,7 +56,13 @@ test('isGodot44OrLater handles supported and unsupported versions', () => {
 test('normalizeParameters converts nested snake_case keys to camelCase', () => {
   const input = {
     project_path: 'C:\\Projects\\Game',
+    godot_path: 'C:\\Tools\\Godot.exe',
     scene_path: 'scenes/main.tscn',
+    wait_for_log: 'READY',
+    ready_timeout_ms: 15000,
+    hide_debug_overlay: true,
+    keep_temp_file: true,
+    line_count: 25,
     properties: {
       root_node_type: 'Node2D',
       child_config: {
@@ -68,7 +74,13 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
 
   assert.deepEqual(normalizeParameters(input, PARAMETER_MAPPINGS), {
     projectPath: 'C:\\Projects\\Game',
+    godotPath: 'C:\\Tools\\Godot.exe',
     scenePath: 'scenes/main.tscn',
+    waitForLog: 'READY',
+    readyTimeoutMs: 15000,
+    hideDebugOverlay: true,
+    keepTempFile: true,
+    lineCount: 25,
     properties: {
       rootNodeType: 'Node2D',
       child_config: {
@@ -82,8 +94,14 @@ test('normalizeParameters converts nested snake_case keys to camelCase', () => {
 test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () => {
   const input = {
     projectPath: 'C:\\Projects\\Game',
+    godotPath: 'C:\\Tools\\Godot.exe',
     scenePath: 'scenes/main.tscn',
     rootNodeType: 'Node2D',
+    waitForLog: 'READY',
+    readyTimeoutMs: 15000,
+    lineCount: 25,
+    hideDebugOverlay: true,
+    keepTempFile: true,
     customFlagName: true,
     properties: {
       nodeName: 'Player',
@@ -95,8 +113,14 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
 
   assert.deepEqual(convertCamelToSnakeCase(input, reverseMappings), {
     project_path: 'C:\\Projects\\Game',
+    godot_path: 'C:\\Tools\\Godot.exe',
     scene_path: 'scenes/main.tscn',
     root_node_type: 'Node2D',
+    wait_for_log: 'READY',
+    ready_timeout_ms: 15000,
+    line_count: 25,
+    hide_debug_overlay: true,
+    keep_temp_file: true,
     custom_flag_name: true,
     properties: {
       node_name: 'Player',
@@ -104,5 +128,35 @@ test('convertCamelToSnakeCase converts mapped and fallback camelCase keys', () =
         mesh_item_names: ['Cube'],
       },
     },
+  });
+});
+
+test('normalizeParameters leaves arrays intact while normalizing nested objects', () => {
+  const input = {
+    mesh_item_names: ['Cube', 'Sphere'],
+    crop: {
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 50,
+    },
+    options: [
+      { keep_temp_file: true },
+      'literal-value',
+    ],
+  };
+
+  assert.deepEqual(normalizeParameters(input, PARAMETER_MAPPINGS), {
+    meshItemNames: ['Cube', 'Sphere'],
+    crop: {
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 50,
+    },
+    options: [
+      { keep_temp_file: true },
+      'literal-value',
+    ],
   });
 });

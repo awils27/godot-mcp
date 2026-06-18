@@ -30,6 +30,7 @@
     "build": "tsc && node scripts/build.js",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "prepare": "npm run build",
+    "smoke-test": "npm run build && node scripts/smoke-test.js",
     "test": "npm run build && node --test build/tests/capture.test.js build/tests/godot-errors.test.js build/tests/godot-paths.test.js build/tests/log-ready.test.js build/tests/ring-buffer.test.js build/tests/server-utils.test.js",
     "watch": "tsc --watch"
   },

@@ -216,6 +216,19 @@ Then point your MCP client to `build/index.js` instead of using `npx`.
 
 The test suite uses Node's built-in test runner and currently focuses on the server's validation and parameter-conversion helpers, which are high-value regression points for path safety and tool argument handling.
 
+For a real-project MCP smoke test over stdio:
+
+```bash
+npm run smoke-test -- --project /path/to/project
+```
+
+Optional flags let you exercise more of the live flow:
+
+```bash
+npm run smoke-test -- --project /path/to/project --run-project --wait-for-log READY
+npm run smoke-test -- --project /path/to/project --capture
+```
+
 </details>
 
 ## Reliability Notes

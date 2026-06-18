@@ -16,13 +16,13 @@
 
 ## Testing
 
-- Add a reusable smoke-test script that exercises the MCP over stdio against a real Godot project.
+- [x] Add a reusable smoke-test script that exercises the MCP over stdio against a real Godot project.
 - Extend screenshot tests to verify:
   - image payload exists
   - image orientation is upright
   - invalid `scenePath` returns the expected error
   - missing display returns the expected error
-- Add more regression tests around tool argument normalization and validation.
+- [x] Add more regression tests around tool argument normalization and validation.
 
 ## Documentation
 

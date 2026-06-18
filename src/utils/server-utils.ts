@@ -4,6 +4,7 @@ export interface OperationParams {
 
 export const PARAMETER_MAPPINGS: Record<string, string> = {
   project_path: 'projectPath',
+  godot_path: 'godotPath',
   scene_path: 'scenePath',
   root_node_type: 'rootNodeType',
   parent_node_path: 'parentNodePath',
@@ -19,7 +20,12 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   recursive: 'recursive',
   scene: 'scene',
   wait_frames: 'waitFrames',
+  wait_for_log: 'waitForLog',
+  ready_timeout_ms: 'readyTimeoutMs',
   timeout_ms: 'timeoutMs',
+  line_count: 'lineCount',
+  hide_debug_overlay: 'hideDebugOverlay',
+  keep_temp_file: 'keepTempFile',
 };
 
 export function buildReverseParameterMappings(
