@@ -30,7 +30,7 @@
     "build": "tsc && node scripts/build.js",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js",
     "prepare": "npm run build",
-    "test": "npm run build && node --test build/tests/capture.test.js build/tests/server-utils.test.js",
+    "test": "npm run build && node --test build/tests/capture.test.js build/tests/godot-paths.test.js build/tests/server-utils.test.js",
     "watch": "tsc --watch"
   },
   "dependencies": {

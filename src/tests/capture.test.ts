@@ -17,6 +17,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 import { handleCaptureScreenshot, handleCaptureSceneScreenshot } from '../tools/capture.js';
+import { resolvePreferredGodotPath } from '../utils/godot-paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,28 +30,7 @@ const FIXTURE_PROJECT = join(__dirname, '..', '..', 'tests', 'fixtures', 'captur
 const FIXTURE_SCENE = 'res://scenes/main.tscn';
 
 function resolveGodotPath(): string | null {
-  if (process.env.GODOT_PATH) return process.env.GODOT_PATH;
-  const defaults: Record<string, string[]> = {
-    darwin: [
-      '/Applications/Godot.app/Contents/MacOS/Godot',
-      '/Applications/Godot_v4.app/Contents/MacOS/Godot',
-    ],
-    win32: [
-      'C:\\Program Files\\Godot\\Godot.exe',
-      'C:\\Program Files (x86)\\Godot\\Godot.exe',
-      'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe',
-    ],
-    linux: ['godot4', 'godot'],
-  };
-  const candidates = defaults[process.platform] ?? ['godot'];
-  for (const p of candidates) {
-    if (p.includes('\\') || p.includes('/')) {
-      if (existsSync(p)) return p;
-    } else {
-      return p; // Rely on PATH lookup; if missing, the test fails with a clear error.
-    }
-  }
-  return null;
+  return resolvePreferredGodotPath();
 }
 
 describe('capture tools', () => {

@@ -23,6 +23,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { handleCaptureScreenshot, handleCaptureSceneScreenshot } from './tools/capture.js';
 import {
+  getEnvGodotPath,
+  getFallbackGodotPath,
+  getGodotPathCandidates,
+} from './utils/godot-paths.js';
+import { createErrorResponse as buildErrorResponse } from './utils/mcp-response.js';
+import {
   type OperationParams,
   PARAMETER_MAPPINGS,
   buildReverseParameterMappings,
@@ -171,24 +177,7 @@ class GodotServer {
       console.error(`[SERVER] Possible solutions: ${possibleSolutions.join(', ')}`);
     }
 
-    const response: any = {
-      content: [
-        {
-          type: 'text',
-          text: message,
-        },
-      ],
-      isError: true,
-    };
-
-    if (possibleSolutions.length > 0) {
-      response.content.push({
-        type: 'text',
-        text: 'Possible solutions:\n- ' + possibleSolutions.join('\n- '),
-      });
-    }
-
-    return response;
+    return buildErrorResponse(message, possibleSolutions);
   }
 
   /**
@@ -268,8 +257,9 @@ class GodotServer {
     }
 
     // Check environment variable next
-    if (process.env.GODOT_PATH) {
-      const normalizedPath = normalize(process.env.GODOT_PATH);
+    const envGodotPath = getEnvGodotPath();
+    if (envGodotPath) {
+      const normalizedPath = normalize(envGodotPath);
       this.logDebug(`Checking GODOT_PATH environment variable: ${normalizedPath}`);
       if (await this.isValidGodotPath(normalizedPath)) {
         this.godotPath = normalizedPath;
@@ -284,43 +274,13 @@ class GodotServer {
     const osPlatform = process.platform;
     this.logDebug(`Auto-detecting Godot path for platform: ${osPlatform}`);
 
-    const possiblePaths: string[] = [
-      'godot', // Check if 'godot' is in PATH first
-    ];
-
-    // Add platform-specific paths
-    if (osPlatform === 'darwin') {
-      possiblePaths.push(
-        '/Applications/Godot.app/Contents/MacOS/Godot',
-        '/Applications/Godot_4.app/Contents/MacOS/Godot',
-        `${process.env.HOME}/Applications/Godot.app/Contents/MacOS/Godot`,
-        `${process.env.HOME}/Applications/Godot_4.app/Contents/MacOS/Godot`,
-        `${process.env.HOME}/Library/Application Support/Steam/steamapps/common/Godot Engine/Godot.app/Contents/MacOS/Godot`
-      );
-    } else if (osPlatform === 'win32') {
-      possiblePaths.push(
-        'C:\\Program Files\\Godot\\Godot.exe',
-        'C:\\Program Files (x86)\\Godot\\Godot.exe',
-        'C:\\Program Files\\Godot_4\\Godot.exe',
-        'C:\\Program Files (x86)\\Godot_4\\Godot.exe',
-        'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe',
-        `${process.env.USERPROFILE}\\Godot\\Godot.exe`
-      );
-    } else if (osPlatform === 'linux') {
-      possiblePaths.push(
-        '/usr/bin/godot',
-        '/usr/local/bin/godot',
-        '/snap/bin/godot',
-        `${process.env.HOME}/.local/bin/godot`
-      );
-    }
+    const possiblePaths = getGodotPathCandidates(osPlatform);
 
     // Try each possible path
     for (const path of possiblePaths) {
-      const normalizedPath = normalize(path);
-      if (await this.isValidGodotPath(normalizedPath)) {
-        this.godotPath = normalizedPath;
-        this.logDebug(`Found Godot at: ${normalizedPath}`);
+      if (await this.isValidGodotPath(path)) {
+        this.godotPath = path;
+        this.logDebug(`Found Godot at: ${path}`);
         return;
       }
     }
@@ -335,13 +295,7 @@ class GodotServer {
       throw new Error(`Could not find a valid Godot executable. Set GODOT_PATH or provide a valid path in config.`);
     } else {
       // Fallback to a default path in non-strict mode; this may not be valid and requires user configuration for reliability
-      if (osPlatform === 'win32') {
-        this.godotPath = normalize('C:\\Program Files\\Godot\\Godot.exe');
-      } else if (osPlatform === 'darwin') {
-        this.godotPath = normalize('/Applications/Godot.app/Contents/MacOS/Godot');
-      } else {
-        this.godotPath = normalize('/usr/bin/godot');
-      }
+      this.godotPath = getFallbackGodotPath(osPlatform);
 
       this.logDebug(`Using default path: ${this.godotPath}, but this may not work.`);
       console.error(`[SERVER] Using default path: ${this.godotPath}, but this may not work.`);
