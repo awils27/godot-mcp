@@ -111,3 +111,15 @@ test('reload_project returns an error when nothing is running', async () => {
     assert.match(String(result.content[0]?.text ?? ''), /No active Godot project to reload/i);
   });
 });
+
+test('get_editor_log returns a clean empty-state response before the editor is launched', async () => {
+  await withClient(async (client) => {
+    const result = await client.callTool({
+      name: 'get_editor_log',
+      arguments: {},
+    }) as { isError?: boolean; content: ToolContentBlock[] };
+
+    assert.ok(!result.isError, `Expected success but got: ${JSON.stringify(result)}`);
+    assert.equal(String(result.content[0]?.text ?? ''), '(no output captured yet)');
+  });
+});

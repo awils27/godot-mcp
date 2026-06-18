@@ -1094,6 +1094,19 @@ class GodotServer {
           },
         },
         {
+          name: 'get_editor_log',
+          description: 'Get recent console output from the Godot editor process launched by this MCP server.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              lineCount: {
+                type: 'number',
+                description: 'Number of trailing lines to return (default 50, max 1000)',
+              },
+            },
+          },
+        },
+        {
           name: 'view_log',
           description: 'View recent console output from the last launched editor or running project. Returns the last N lines of captured stdout/stderr.',
           inputSchema: {
@@ -1265,6 +1278,8 @@ class GodotServer {
           return await this.handleRunScene(request.params.arguments);
         case 'reload_project':
           return await this.handleReloadProject();
+        case 'get_editor_log':
+          return await this.handleGetEditorLog(request.params.arguments);
         case 'view_log':
           return await this.handleViewLog(request.params.arguments);
         case 'quit_godot':
@@ -1374,7 +1389,7 @@ class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot editor launched for project at ${args.projectPath} using ${godotPath}. Use view_log to check the console output.`,
+            text: `Godot editor launched for project at ${args.projectPath} using ${godotPath}. Use get_editor_log to check the console output.`,
           },
         ],
       };
@@ -2447,10 +2462,7 @@ class GodotServer {
     }
   }
 
-  /**
-   * Handle the view_log tool
-   */
-  private async handleViewLog(args: any) {
+  private buildEditorLogResponse(args: any) {
     args = this.normalizeParameters(args);
 
     let lineCount = 50; // default
@@ -2468,6 +2480,20 @@ class GodotServer {
         },
       ],
     };
+  }
+
+  /**
+   * Handle the get_editor_log tool
+   */
+  private async handleGetEditorLog(args: any) {
+    return this.buildEditorLogResponse(args);
+  }
+
+  /**
+   * Handle the view_log tool
+   */
+  private async handleViewLog(args: any) {
+    return this.buildEditorLogResponse(args);
   }
 
   /**

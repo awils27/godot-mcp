@@ -268,10 +268,11 @@ Run a Godot project in debug mode and capture stdout/stderr for `get_debug_outpu
 - Force a specific executable for one run:
   `run_project({ projectPath: "C:\\Projects\\MyGame", godotPath: "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe" })`
 
-### `get_debug_output` and `view_log`
+### `get_debug_output`, `get_editor_log`, and `view_log`
 
 - `get_debug_output` returns structured JSON-like output for the currently running project.
-- `view_log` returns the most recent captured lines from the last launched editor or running project.
+- `get_editor_log` returns the most recent captured lines from the editor process started with `launch_editor`.
+- `view_log` remains available as a compatibility alias for editor log output.
 - Both are bounded internally, so long sessions do not grow memory without limit.
 
 ### `get_main_scene`
