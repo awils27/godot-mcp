@@ -218,6 +218,12 @@ The test suite uses Node's built-in test runner and currently focuses on the ser
 
 </details>
 
+## Reliability Notes
+
+- Windows auto-detection now checks common standalone installs, Steam installs, and additional `Program Files` / `LocalAppData\\Programs` locations before falling back to `godot` on `PATH`.
+- `launch_editor`, `run_project`, `capture_screenshot`, and `capture_scene_screenshot` accept an optional `godotPath` argument when you need to force a specific executable for a single call.
+- `run_project` also accepts `waitForLog` and `readyTimeoutMs` so callers can wait for a known startup log line before treating the project as ready.
+
 
 ## Visual Debugging
 
@@ -245,6 +251,7 @@ Run a scene (or the project main scene) and capture one rendered frame.
 | `scale` | number | | Optional post-capture scale factor such as `0.5` or `2`. |
 | `hideDebugOverlay` | boolean | `false` | Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise. |
 | `keepTempFile` | boolean | `false` | Keeps the temporary PNG on disk and includes its path in the response text. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
 
 ### `capture_scene_screenshot`
 
@@ -259,6 +266,7 @@ Load a specific `.tscn` file and capture one frame without running the full proj
 | `scale` | number | | Optional post-capture scale factor such as `0.5` or `2`. |
 | `hideDebugOverlay` | boolean | `false` | Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise. |
 | `keepTempFile` | boolean | `false` | Keeps the temporary PNG on disk and includes its path in the response text. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
 
 ### Rendering context requirement
 

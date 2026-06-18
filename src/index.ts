@@ -28,6 +28,7 @@ import {
   getFallbackGodotPath,
   getGodotPathCandidates,
 } from './utils/godot-paths.js';
+import { waitForLogReadySignal } from './utils/log-ready.js';
 import { createErrorResponse as buildErrorResponse } from './utils/mcp-response.js';
 import { RingBuffer } from './utils/ring-buffer.js';
 import {
@@ -232,6 +233,48 @@ class GodotServer {
       `${actionLabel} failed (${details.kind}): ${details.summary}`,
       solutions.length > 0 ? solutions : fallbackSolutions
     );
+  }
+
+  private async resolveGodotPathForArgs(
+    args: Record<string, unknown> | undefined
+  ): Promise<{ ok: true; godotPath: string } | { ok: false; response: object }> {
+    const override = typeof args?.godotPath === 'string' ? args.godotPath.trim() : '';
+    if (override) {
+      const normalizedOverride = normalize(override);
+      if (await this.isValidGodotPath(normalizedOverride)) {
+        return { ok: true, godotPath: normalizedOverride };
+      }
+
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          `Invalid godotPath override: ${override}`,
+          [
+            'Pass a full path to a launchable Godot executable',
+            'Remove the override to fall back to auto-detection or GODOT_PATH',
+          ]
+        ),
+      };
+    }
+
+    if (!this.godotPath) {
+      await this.detectGodotPath();
+    }
+
+    if (!this.godotPath) {
+      return {
+        ok: false,
+        response: this.createErrorResponse(
+          'Could not find a valid Godot executable path',
+          [
+            'Ensure Godot is installed correctly',
+            'Set GODOT_PATH environment variable',
+          ]
+        ),
+      };
+    }
+
+    return { ok: true, godotPath: this.godotPath };
   }
 
   /**
@@ -630,6 +673,10 @@ class GodotServer {
                 type: 'string',
                 description: 'Path to the Godot project directory',
               },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
             },
             required: ['projectPath'],
           },
@@ -647,6 +694,18 @@ class GodotServer {
               scene: {
                 type: 'string',
                 description: 'Optional: Specific scene to run',
+              },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
+              waitForLog: {
+                type: 'string',
+                description: 'Optional log substring to wait for before returning success.',
+              },
+              readyTimeoutMs: {
+                type: 'number',
+                description: 'Maximum time to wait for waitForLog to appear before returning an error (default 10000).',
               },
             },
             required: ['projectPath'],
@@ -946,6 +1005,10 @@ class GodotServer {
                 type: 'boolean',
                 description: 'Keep the captured PNG on disk and include its temporary path in the response text.',
               },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
             },
             required: ['projectPath'],
           },
@@ -991,6 +1054,10 @@ class GodotServer {
                 type: 'boolean',
                 description: 'Keep the captured PNG on disk and include its temporary path in the response text.',
               },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
             },
             required: ['projectPath', 'scenePath'],
           },
@@ -1035,29 +1102,25 @@ class GodotServer {
         case 'quit_godot':
           return await this.handleQuitGodot();
         case 'capture_screenshot': {
-          if (!this.godotPath) await this.detectGodotPath();
-          if (!this.godotPath) {
-            return this.createErrorResponse(
-              'Could not find a valid Godot executable path',
-              ['Ensure Godot is installed correctly', 'Set GODOT_PATH environment variable']
-            );
+          const args = this.normalizeParameters(request.params.arguments as Record<string, unknown>);
+          const resolved = await this.resolveGodotPathForArgs(args);
+          if (!resolved.ok) {
+            return resolved.response;
           }
           return await handleCaptureScreenshot(
-            this.normalizeParameters(request.params.arguments as Record<string, unknown>),
-            { godotPath: this.godotPath, operationsScriptPath: this.operationsScriptPath }
+            args,
+            { godotPath: resolved.godotPath, operationsScriptPath: this.operationsScriptPath }
           );
         }
         case 'capture_scene_screenshot': {
-          if (!this.godotPath) await this.detectGodotPath();
-          if (!this.godotPath) {
-            return this.createErrorResponse(
-              'Could not find a valid Godot executable path',
-              ['Ensure Godot is installed correctly', 'Set GODOT_PATH environment variable']
-            );
+          const args = this.normalizeParameters(request.params.arguments as Record<string, unknown>);
+          const resolved = await this.resolveGodotPathForArgs(args);
+          if (!resolved.ok) {
+            return resolved.response;
           }
           return await handleCaptureSceneScreenshot(
-            this.normalizeParameters(request.params.arguments as Record<string, unknown>),
-            { godotPath: this.godotPath, operationsScriptPath: this.operationsScriptPath }
+            args,
+            { godotPath: resolved.godotPath, operationsScriptPath: this.operationsScriptPath }
           );
         }
         default:
@@ -1092,19 +1155,11 @@ class GodotServer {
     }
 
     try {
-      // Ensure godotPath is set
-      if (!this.godotPath) {
-        await this.detectGodotPath();
-        if (!this.godotPath) {
-          return this.createErrorResponse(
-            'Could not find a valid Godot executable path',
-            [
-              'Ensure Godot is installed correctly',
-              'Set GODOT_PATH environment variable to specify the correct path',
-            ]
-          );
-        }
+      const resolved = await this.resolveGodotPathForArgs(args);
+      if (!resolved.ok) {
+        return resolved.response;
       }
+      const godotPath = resolved.godotPath;
 
       // Check if the project directory exists and contains a project.godot file
       const projectFile = join(args.projectPath, 'project.godot');
@@ -1123,7 +1178,7 @@ class GodotServer {
       // Clear the log buffer on each new launch
       this.editorLogLines.clear();
 
-      const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
+      const process = spawn(godotPath, ['-e', '--path', args.projectPath], {
         stdio: 'pipe',
       });
 
@@ -1151,7 +1206,7 @@ class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot editor launched for project at ${args.projectPath}. Use view_log to check the console output.`,
+            text: `Godot editor launched for project at ${args.projectPath} using ${godotPath}. Use view_log to check the console output.`,
           },
         ],
       };
@@ -1191,6 +1246,12 @@ class GodotServer {
     }
 
     try {
+      const resolved = await this.resolveGodotPathForArgs(args);
+      if (!resolved.ok) {
+        return resolved.response;
+      }
+      const godotPath = resolved.godotPath;
+
       // Check if the project directory exists and contains a project.godot file
       const projectFile = join(args.projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
@@ -1216,7 +1277,7 @@ class GodotServer {
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      const process = spawn(godotPath, cmdArgs, { stdio: 'pipe' });
       const output = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
       const errors = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
       this.attachProcessStream(process.stdout, 'stdout', output);
@@ -1239,11 +1300,55 @@ class GodotServer {
 
       this.activeProcess = { process, output, errors };
 
+      if (typeof args.waitForLog === 'string' && args.waitForLog.trim()) {
+        const readyTimeoutMs =
+          typeof args.readyTimeoutMs === 'number' && Number.isFinite(args.readyTimeoutMs)
+            ? Math.max(1, Math.floor(args.readyTimeoutMs))
+            : 10000;
+
+        const waitResult = await waitForLogReadySignal(
+          process,
+          output,
+          errors,
+          args.waitForLog,
+          readyTimeoutMs
+        );
+
+        if (!waitResult.ok) {
+          if (waitResult.reason === 'exit') {
+            return this.createErrorResponse(
+              `Godot project exited before the ready signal "${args.waitForLog}" appeared.`,
+              [
+                'Use get_debug_output or view_log to inspect startup errors',
+                'Verify the requested scene and project resources load correctly',
+              ]
+            );
+          }
+
+          return this.createErrorResponse(
+            `Godot project did not emit the ready signal "${args.waitForLog}" within ${readyTimeoutMs}ms.`,
+            [
+              'Increase readyTimeoutMs if the project loads slowly',
+              'Use get_debug_output or view_log to inspect startup progress while the process continues running',
+            ]
+          );
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Godot project started and reported ready via log match "${args.waitForLog}" on line: ${waitResult.matchedLine}`,
+            },
+          ],
+        };
+      }
+
       return {
         content: [
           {
             type: 'text',
-            text: `Godot project started in debug mode. Use get_debug_output to see output.`,
+            text: `Godot project started in debug mode using ${godotPath}. Use get_debug_output to see output.`,
           },
         ],
       };

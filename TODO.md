@@ -10,9 +10,9 @@
 
 ## Reliability
 
-- Allow per-tool `godotPath` overrides for `launch_editor`, `run_project`, and screenshot tools.
-- Expand Windows auto-detection for Godot installs beyond the current default and Steam locations.
-- Let `run_project` optionally wait for a ready signal in logs before returning.
+- [x] Allow per-tool `godotPath` overrides for `launch_editor`, `run_project`, and screenshot tools.
+- [x] Expand Windows auto-detection for Godot installs beyond the current default and Steam locations.
+- [x] Let `run_project` optionally wait for a ready signal in logs before returning.
 
 ## Testing
 
