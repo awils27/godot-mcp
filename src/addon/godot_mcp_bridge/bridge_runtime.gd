@@ -1,6 +1,6 @@
 extends Node
 
-const DEFAULT_PROPERTY_NAMES := PackedStringArray([
+const DEFAULT_PROPERTY_NAMES := [
     "visible",
     "process_mode",
     "position",
@@ -9,7 +9,7 @@ const DEFAULT_PROPERTY_NAMES := PackedStringArray([
     "global_position",
     "global_rotation",
     "global_scale"
-])
+]
 const MAX_TREE_NODES := 500
 
 var _socket := StreamPeerTCP.new()
