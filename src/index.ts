@@ -22,12 +22,14 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { handleCaptureScreenshot, handleCaptureSceneScreenshot } from './tools/capture.js';
+import { extractGodotErrorDetails, getGodotErrorSolutions } from './utils/godot-errors.js';
 import {
   getEnvGodotPath,
   getFallbackGodotPath,
   getGodotPathCandidates,
 } from './utils/godot-paths.js';
 import { createErrorResponse as buildErrorResponse } from './utils/mcp-response.js';
+import { RingBuffer } from './utils/ring-buffer.js';
 import {
   type OperationParams,
   PARAMETER_MAPPINGS,
@@ -42,6 +44,8 @@ import {
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
+const LOG_BUFFER_LIMIT = 2000;
+const PROCESS_OUTPUT_LIMIT = 1000;
 
 const execFileAsync = promisify(execFile);
 
@@ -54,8 +58,8 @@ const __dirname = dirname(__filename);
  */
 interface GodotProcess {
   process: any;
-  output: string[];
-  errors: string[];
+  output: RingBuffer<string>;
+  errors: RingBuffer<string>;
 }
 
 /**
@@ -79,7 +83,7 @@ class GodotServer {
   private validatedPaths: Map<string, boolean> = new Map();
   private strictPathValidation: boolean = false;
   // In-memory log buffer for editor console output (shared across launch/run)
-  private editorLogLines: string[] = [];
+  private editorLogLines = new RingBuffer<string>(LOG_BUFFER_LIMIT);
   // Track the editor process spawned by launch_editor so quit_godot can close it
   private editorProcess: any = null;
 
@@ -178,6 +182,56 @@ class GodotServer {
     }
 
     return buildErrorResponse(message, possibleSolutions);
+  }
+
+  private appendLogLine(buffer: RingBuffer<string>, source: string, line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    buffer.push(`[${source}] ${trimmed}`);
+  }
+
+  private attachProcessStream(
+    stream: NodeJS.ReadableStream | null | undefined,
+    source: 'stdout' | 'stderr',
+    buffer: RingBuffer<string>
+  ): void {
+    if (!stream) return;
+
+    let partialLine = '';
+    stream.on('data', (chunk: Buffer | string) => {
+      partialLine += chunk.toString();
+      while (true) {
+        const newlineIndex = partialLine.indexOf('\n');
+        if (newlineIndex === -1) break;
+        const line = partialLine.substring(0, newlineIndex);
+        this.appendLogLine(buffer, source, line);
+        partialLine = partialLine.substring(newlineIndex + 1);
+      }
+    });
+
+    stream.on('end', () => {
+      if (partialLine.trim()) {
+        this.appendLogLine(buffer, source, partialLine);
+      }
+    });
+  }
+
+  private buildOperationErrorResponse(
+    actionLabel: string,
+    stdout: string,
+    stderr: string,
+    fallbackSolutions: string[]
+  ): object | null {
+    const details = extractGodotErrorDetails(stdout, stderr);
+    if (!details) {
+      return null;
+    }
+
+    const solutions = [...details.lines.slice(1, 3), ...getGodotErrorSolutions(details.kind)];
+    return this.createErrorResponse(
+      `${actionLabel} failed (${details.kind}): ${details.summary}`,
+      solutions.length > 0 ? solutions : fallbackSolutions
+    );
   }
 
   /**
@@ -1067,43 +1121,16 @@ class GodotServer {
       this.logDebug(`Launching Godot editor for project: ${args.projectPath}`);
 
       // Clear the log buffer on each new launch
-      this.editorLogLines = [];
+      this.editorLogLines.clear();
 
       const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
         stdio: 'pipe',
       });
 
-      // Pipe stdout into the shared log buffer (line by line)
-      if (process.stdout) {
-        let partialLine = '';
-        process.stdout.on('data', (chunk: Buffer) => {
-          const text = chunk.toString();
-          partialLine += text;
-          while (true) {
-            const newlineIndex = partialLine.indexOf('\n');
-            if (newlineIndex === -1) break;
-            const line = partialLine.substring(0, newlineIndex);
-            this.editorLogLines.push(`[stdout] ${line}`);
-            partialLine = partialLine.substring(newlineIndex + 1);
-          }
-        });
-      }
+      this.attachProcessStream(process.stdout, 'stdout', this.editorLogLines);
 
       // Pipe stderr into the shared log buffer (line by line) — Godot writes errors here
-      if (process.stderr) {
-        let partialLineErr = '';
-        process.stderr.on('data', (chunk: Buffer) => {
-          const text = chunk.toString();
-          partialLineErr += text;
-          while (true) {
-            const newlineIndex = partialLineErr.indexOf('\n');
-            if (newlineIndex === -1) break;
-            const line = partialLineErr.substring(0, newlineIndex);
-            this.editorLogLines.push(`[stderr] ${line}`);
-            partialLineErr = partialLineErr.substring(newlineIndex + 1);
-          }
-        });
-      }
+      this.attachProcessStream(process.stderr, 'stderr', this.editorLogLines);
 
       // Track the spawned editor so quit_godot can close it later
       this.editorProcess = process;
@@ -1117,7 +1144,7 @@ class GodotServer {
 
       process.on('error', (err: Error) => {
         console.error('Failed to start Godot editor:', err);
-        this.editorLogLines.push(`[spawn error] ${err.message}`);
+        this.appendLogLine(this.editorLogLines, 'spawn error', err.message);
       });
 
       return {
@@ -1190,24 +1217,10 @@ class GodotServer {
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
       const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
-      const output: string[] = [];
-      const errors: string[] = [];
-
-      process.stdout?.on('data', (data: Buffer) => {
-        const lines = data.toString().split('\n');
-        output.push(...lines);
-        lines.forEach((line: string) => {
-          if (line.trim()) this.logDebug(`[Godot stdout] ${line}`);
-        });
-      });
-
-      process.stderr?.on('data', (data: Buffer) => {
-        const lines = data.toString().split('\n');
-        errors.push(...lines);
-        lines.forEach((line: string) => {
-          if (line.trim()) this.logDebug(`[Godot stderr] ${line}`);
-        });
-      });
+      const output = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
+      const errors = new RingBuffer<string>(PROCESS_OUTPUT_LIMIT);
+      this.attachProcessStream(process.stdout, 'stdout', output);
+      this.attachProcessStream(process.stderr, 'stderr', errors);
 
       process.on('exit', (code: number | null) => {
         this.logDebug(`Godot process exited with code ${code}`);
@@ -1218,6 +1231,7 @@ class GodotServer {
 
       process.on('error', (err: Error) => {
         console.error('Failed to start Godot process:', err);
+        this.appendLogLine(errors, 'spawn error', err.message);
         if (this.activeProcess && this.activeProcess.process === process) {
           this.activeProcess = null;
         }
@@ -1266,8 +1280,8 @@ class GodotServer {
           type: 'text',
           text: JSON.stringify(
             {
-              output: this.activeProcess.output,
-              errors: this.activeProcess.errors,
+              output: this.activeProcess.output.toArray(),
+              errors: this.activeProcess.errors.toArray(),
             },
             null,
             2
@@ -1293,8 +1307,8 @@ class GodotServer {
 
     this.logDebug('Stopping active Godot process');
     this.activeProcess.process.kill();
-    const output = this.activeProcess.output;
-    const errors = this.activeProcess.errors;
+    const output = this.activeProcess.output.toArray();
+    const errors = this.activeProcess.errors.toArray();
     this.activeProcess = null;
 
     return {
@@ -1622,15 +1636,13 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('create_scene', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to create scene: ${stderr}`,
-          [
-            'Check if the root node type is valid',
-            'Ensure you have write permissions to the scene path',
-            'Verify the scene path is valid',
-          ]
-        );
+      const createSceneError = this.buildOperationErrorResponse('Create scene', stdout, stderr, [
+        'Check if the root node type is valid',
+        'Ensure you have write permissions to the scene path',
+        'Verify the scene path is valid',
+      ]);
+      if (createSceneError) {
+        return createSceneError;
       }
 
       return {
@@ -1725,15 +1737,13 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('add_node', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to add node: ${stderr}`,
-          [
-            'Check if the node type is valid',
-            'Ensure the parent node path exists',
-            'Verify the scene file is valid',
-          ]
-        );
+      const addNodeError = this.buildOperationErrorResponse('Add node', stdout, stderr, [
+        'Check if the node type is valid',
+        'Ensure the parent node path exists',
+        'Verify the scene file is valid',
+      ]);
+      if (addNodeError) {
+        return addNodeError;
       }
 
       return {
@@ -1829,15 +1839,13 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('load_sprite', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to load sprite: ${stderr}`,
-          [
-            'Check if the node path is correct',
-            'Ensure the node is a Sprite2D, Sprite3D, or TextureRect',
-            'Verify the texture file is a valid image format',
-          ]
-        );
+      const loadSpriteError = this.buildOperationErrorResponse('Load sprite', stdout, stderr, [
+        'Check if the node path is correct',
+        'Ensure the node is a Sprite2D, Sprite3D, or TextureRect',
+        'Verify the texture file is a valid image format',
+      ]);
+      if (loadSpriteError) {
+        return loadSpriteError;
       }
 
       return {
@@ -1924,15 +1932,13 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('export_mesh_library', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to export mesh library: ${stderr}`,
-          [
-            'Check if the scene contains valid 3D meshes',
-            'Ensure the output path is valid',
-            'Verify the scene file is valid',
-          ]
-        );
+      const exportMeshError = this.buildOperationErrorResponse('Export mesh library', stdout, stderr, [
+        'Check if the scene contains valid 3D meshes',
+        'Ensure the output path is valid',
+        'Verify the scene file is valid',
+      ]);
+      if (exportMeshError) {
+        return exportMeshError;
       }
 
       return {
@@ -2022,15 +2028,13 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('save_scene', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to save scene: ${stderr}`,
-          [
-            'Check if the scene file is valid',
-            'Ensure you have write permissions to the output path',
-            'Verify the scene can be properly packed',
-          ]
-        );
+      const saveSceneError = this.buildOperationErrorResponse('Save scene', stdout, stderr, [
+        'Check if the scene file is valid',
+        'Ensure you have write permissions to the output path',
+        'Verify the scene can be properly packed',
+      ]);
+      if (saveSceneError) {
+        return saveSceneError;
       }
 
       const savePath = args.newPath || args.scenePath;
@@ -2133,14 +2137,12 @@ class GodotServer {
       // Execute the operation
       const { stdout, stderr } = await this.executeOperation('get_uid', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to get UID: ${stderr}`,
-          [
-            'Check if the file is a valid Godot resource',
-            'Ensure the file path is correct',
-          ]
-        );
+      const getUidError = this.buildOperationErrorResponse('Get UID', stdout, stderr, [
+        'Check if the file is a valid Godot resource',
+        'Ensure the file path is correct',
+      ]);
+      if (getUidError) {
+        return getUidError;
       }
 
       return {
@@ -2174,7 +2176,7 @@ class GodotServer {
       lineCount = Math.max(1, Math.min(1000, Math.floor(args.lineCount)));
     }
 
-    const lines = this.editorLogLines.slice(-lineCount);
+    const lines = this.editorLogLines.tail(lineCount);
 
     return {
       content: [
@@ -2259,14 +2261,12 @@ class GodotServer {
       };
       const { stdout, stderr } = await this.executeOperation('resave_resources', params, args.projectPath);
 
-      if (stderr && stderr.includes('Failed to')) {
-        return this.createErrorResponse(
-          `Failed to update project UIDs: ${stderr}`,
-          [
-            'Check if the project is valid',
-            'Ensure you have write permissions to the project directory',
-          ]
-        );
+      const updateUidError = this.buildOperationErrorResponse('Update project UIDs', stdout, stderr, [
+        'Check if the project is valid',
+        'Ensure you have write permissions to the project directory',
+      ]);
+      if (updateUidError) {
+        return updateUidError;
       }
 
       return {

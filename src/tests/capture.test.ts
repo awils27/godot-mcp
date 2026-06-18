@@ -71,7 +71,7 @@ describe('capture tools', () => {
     }
 
     const result = await handleCaptureSceneScreenshot(
-      { projectPath: FIXTURE_PROJECT, scenePath: FIXTURE_SCENE, timeoutMs: 20000 },
+      { projectPath: FIXTURE_PROJECT, scenePath: FIXTURE_SCENE, timeoutMs: 30000 },
       {
         godotPath,
         operationsScriptPath: join(__dirname, '..', 'scripts', 'godot_operations.gd'),

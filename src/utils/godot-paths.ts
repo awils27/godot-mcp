@@ -12,10 +12,12 @@ export function getGodotPathCandidates(
   platform: SupportedPlatform = process.platform,
   env: ProcessEnvLike = process.env
 ): string[] {
-  const candidates = ['godot'];
+  const commandCandidates = ['godot'];
+  const filesystemCandidates: string[] = [];
 
   if (platform === 'darwin') {
-    candidates.push(
+    commandCandidates.push('godot4');
+    filesystemCandidates.push(
       '/Applications/Godot.app/Contents/MacOS/Godot',
       '/Applications/Godot_4.app/Contents/MacOS/Godot',
       `${env.HOME}/Applications/Godot.app/Contents/MacOS/Godot`,
@@ -23,7 +25,7 @@ export function getGodotPathCandidates(
       `${env.HOME}/Library/Application Support/Steam/steamapps/common/Godot Engine/Godot.app/Contents/MacOS/Godot`
     );
   } else if (platform === 'win32') {
-    candidates.push(
+    filesystemCandidates.push(
       'C:\\Program Files\\Godot\\Godot.exe',
       'C:\\Program Files (x86)\\Godot\\Godot.exe',
       'C:\\Program Files\\Godot_4\\Godot.exe',
@@ -32,8 +34,8 @@ export function getGodotPathCandidates(
       `${env.USERPROFILE}\\Godot\\Godot.exe`
     );
   } else if (platform === 'linux') {
-    candidates.push(
-      'godot4',
+    commandCandidates.push('godot4');
+    filesystemCandidates.push(
       '/usr/bin/godot',
       '/usr/local/bin/godot',
       '/snap/bin/godot',
@@ -41,7 +43,9 @@ export function getGodotPathCandidates(
     );
   }
 
-  return candidates.filter(Boolean).map((candidate) => normalize(candidate));
+  return [...filesystemCandidates, ...commandCandidates]
+    .filter(Boolean)
+    .map((candidate) => normalize(candidate));
 }
 
 export function getFallbackGodotPath(platform: SupportedPlatform = process.platform): string {
@@ -64,10 +68,13 @@ export function resolvePreferredGodotPath(
   }
 
   for (const candidate of getGodotPathCandidates(platform, env)) {
-    if (candidate === 'godot' || candidate === 'godot4') {
+    if (existsSync(candidate)) {
       return candidate;
     }
-    if (existsSync(candidate)) {
+  }
+
+  for (const candidate of getGodotPathCandidates(platform, env)) {
+    if (candidate === 'godot' || candidate === 'godot4') {
       return candidate;
     }
   }

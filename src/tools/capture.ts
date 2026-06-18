@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
+import { extractGodotErrorDetails, getGodotErrorSolutions } from '../utils/godot-errors.js';
 import { createErrorResponse } from '../utils/mcp-response.js';
 import {
   cleanupTemp,
@@ -22,6 +23,11 @@ interface CaptureExecutionConfig {
   possibleSolutions: string[];
   timeoutMessage: string;
   timeoutMs: number;
+}
+
+interface ExecFileErrorWithOutput extends Error {
+  stderr?: string;
+  stdout?: string;
 }
 
 async function runCaptureOperation(
@@ -65,10 +71,21 @@ async function runCaptureOperation(
       };
     }
     if (!existsSync(execution.outputPath)) {
+      const execError = err as ExecFileErrorWithOutput;
+      const stdout = execError.stdout ?? '';
+      const stderr = execError.stderr ?? '';
+      const details = extractGodotErrorDetails(stdout, stderr);
       const msg = err instanceof Error ? err.message : String(err);
       return {
         ok: false,
-        response: createErrorResponse(`${execution.failureMessage}: ${msg}`, execution.possibleSolutions),
+        response: createErrorResponse(
+          details
+            ? `${execution.failureMessage} (${details.kind}): ${details.summary}`
+            : `${execution.failureMessage}: ${msg}`,
+          details
+            ? [...details.lines.slice(1, 3), ...getGodotErrorSolutions(details.kind)]
+            : execution.possibleSolutions
+        ),
       };
     }
   } finally {
