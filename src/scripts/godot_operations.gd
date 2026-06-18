@@ -71,6 +71,8 @@ func _init():
             get_uid(params)
         "resave_resources":
             resave_resources(params)
+        "get_scene_tree":
+            get_scene_tree(params)
         "capture_screenshot":
             _capture_screenshot_async(params)
             return
@@ -1223,6 +1225,71 @@ func _apply_image_transforms(img: Image, params: Dictionary) -> Image:
             transformed.resize(scaled_width, scaled_height, Image.INTERPOLATE_BILINEAR)
 
     return transformed
+
+func _build_scene_tree_dict(node: Node, include_owner: bool, current_path: String) -> Dictionary:
+    var result := {
+        "name": node.name,
+        "type": node.get_class(),
+        "path": current_path,
+        "children": []
+    }
+
+    if include_owner and node.owner != null:
+        result["owner"] = str(node.owner.get_path())
+
+    var children: Array = []
+    for child in node.get_children():
+        if child is Node:
+            var child_path := current_path + "/" + child.name if current_path != "." else current_path + "/" + child.name
+            children.append(_build_scene_tree_dict(child, include_owner, child_path))
+    result["children"] = children
+
+    return result
+
+func get_scene_tree(params: Dictionary) -> void:
+    var scene_path := String(params.get("scene_path", ""))
+    var root_node_path := String(params.get("root_node_path", ""))
+    var include_owner := bool(params.get("include_owner", false))
+
+    if scene_path == "":
+        scene_path = String(ProjectSettings.get_setting("application/run/main_scene", ""))
+        if scene_path == "":
+            printerr("No main scene set in project and no scene_path provided")
+            quit(1)
+            return
+
+    if not scene_path.begins_with("res://"):
+        printerr("scene_path must begin with res://: " + scene_path)
+        quit(1)
+        return
+
+    var packed = load(scene_path)
+    if packed == null:
+        printerr("Failed to load scene: " + scene_path)
+        quit(1)
+        return
+
+    var instance = packed.instantiate()
+    if instance == null:
+        printerr("Failed to instantiate scene: " + scene_path)
+        quit(1)
+        return
+
+    var target: Node = instance
+    if root_node_path != "":
+        var resolved = instance.get_node_or_null(root_node_path)
+        if resolved == null:
+            printerr("Root node path not found: " + root_node_path)
+            quit(1)
+            return
+        target = resolved
+
+    var json := JSON.stringify({
+        "scene_path": scene_path,
+        "tree": _build_scene_tree_dict(target, include_owner, ".")
+    })
+    print("__MCP_RESULT__:" + json)
+    quit(0)
 
 # Run the project main scene (or a named scene), wait N frames, capture one frame.
 # This function is a coroutine. Called without await from _init(); the main loop

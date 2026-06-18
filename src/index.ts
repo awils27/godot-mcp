@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize } from 'path';
-import { existsSync, readdirSync, mkdirSync } from 'fs';
+import { existsSync, readdirSync, mkdirSync, readFileSync } from 'fs';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -61,6 +61,7 @@ interface GodotProcess {
   process: any;
   output: RingBuffer<string>;
   errors: RingBuffer<string>;
+  launchArgs: Record<string, unknown>;
 }
 
 /**
@@ -235,6 +236,23 @@ class GodotServer {
     );
   }
 
+  private extractJsonResult<T>(stdout: string): T | null {
+    const marker = '__MCP_RESULT__:';
+    const line = stdout
+      .split(/\r?\n/)
+      .find((entry) => entry.startsWith(marker));
+
+    if (!line) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(line.slice(marker.length)) as T;
+    } catch {
+      return null;
+    }
+  }
+
   private async resolveGodotPathForArgs(
     args: Record<string, unknown> | undefined
   ): Promise<{ ok: true; godotPath: string } | { ok: false; response: object }> {
@@ -275,6 +293,46 @@ class GodotServer {
     }
 
     return { ok: true, godotPath: this.godotPath };
+  }
+
+  private readProjectConfig(projectPath: string): string {
+    return readFileSync(join(projectPath, 'project.godot'), 'utf8');
+  }
+
+  private extractMainSceneFromConfig(projectConfig: string): string | null {
+    const match = projectConfig.match(/run\/main_scene="([^"]+)"/);
+    return match?.[1] ?? null;
+  }
+
+  private extractProjectNameFromConfig(projectConfig: string): string | null {
+    const match = projectConfig.match(/config\/name="([^"]+)"/);
+    return match?.[1] ?? null;
+  }
+
+  private listScenePaths(projectPath: string): string[] {
+    const scenes: string[] = [];
+
+    const scanDirectory = (currentPath: string) => {
+      const entries = readdirSync(currentPath, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) {
+          continue;
+        }
+
+        const entryPath = join(currentPath, entry.name);
+        if (entry.isDirectory()) {
+          scanDirectory(entryPath);
+        } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.tscn')) {
+          const relativePath = normalize(entryPath.slice(projectPath.length + 1)).replace(/\\/g, '/');
+          scenes.push(`res://${relativePath}`);
+        }
+      }
+    };
+
+    scanDirectory(projectPath);
+    scenes.sort();
+    return scenes;
   }
 
   /**
@@ -480,7 +538,8 @@ class GodotServer {
   private async executeOperation(
     operation: string,
     params: OperationParams,
-    projectPath: string
+    projectPath: string,
+    godotPathOverride?: string
   ): Promise<{ stdout: string; stderr: string }> {
     this.logDebug(`Executing operation: ${operation} in project: ${projectPath}`);
     this.logDebug(`Original operation params: ${JSON.stringify(params)}`);
@@ -491,12 +550,14 @@ class GodotServer {
 
 
     // Ensure godotPath is set
-    if (!this.godotPath) {
+    if (!this.godotPath && !godotPathOverride) {
       await this.detectGodotPath();
       if (!this.godotPath) {
         throw new Error('Could not find a valid Godot executable path');
       }
     }
+
+    const godotPath = godotPathOverride ?? this.godotPath!;
 
     try {
       // Serialize the snake_case parameters to a valid JSON string
@@ -519,9 +580,9 @@ class GodotServer {
         args.push('--debug-godot');
       }
 
-      this.logDebug(`Executing: ${this.godotPath} ${args.join(' ')}`);
+      this.logDebug(`Executing: ${godotPath} ${args.join(' ')}`);
 
-      const { stdout, stderr } = await execFileAsync(this.godotPath!, args);
+      const { stdout, stderr } = await execFileAsync(godotPath, args);
 
       return { stdout: stdout ?? '', stderr: stderr ?? '' };
     } catch (error: unknown) {
@@ -757,6 +818,34 @@ class GodotServer {
           },
         },
         {
+          name: 'get_main_scene',
+          description: 'Get the configured main scene for a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'list_scenes',
+          description: 'List .tscn scenes in a Godot project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
           name: 'get_project_info',
           description: 'Retrieve metadata about a Godot project',
           inputSchema: {
@@ -936,6 +1025,75 @@ class GodotServer {
           },
         },
         {
+          name: 'get_scene_tree',
+          description: 'Inspect the node tree of a scene file without running the full project.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              scenePath: {
+                type: 'string',
+                description: 'Optional res:// path to the scene file. Defaults to the project main scene.',
+              },
+              rootNodePath: {
+                type: 'string',
+                description: 'Optional node path inside the instantiated scene to inspect as a subtree.',
+              },
+              includeOwner: {
+                type: 'boolean',
+                description: 'Include owner paths in each returned node when available.',
+              },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'run_scene',
+          description: 'Run a specific Godot scene in debug mode and capture output.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              scenePath: {
+                type: 'string',
+                description: 'res:// path to the scene file to run.',
+              },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
+              waitForLog: {
+                type: 'string',
+                description: 'Optional log substring to wait for before returning success.',
+              },
+              readyTimeoutMs: {
+                type: 'number',
+                description: 'Maximum time to wait for waitForLog to appear before returning an error (default 10000).',
+              },
+            },
+            required: ['projectPath', 'scenePath'],
+          },
+        },
+        {
+          name: 'reload_project',
+          description: 'Restart the currently tracked Godot project using the last run configuration.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+            required: [],
+          },
+        },
+        {
           name: 'view_log',
           description: 'View recent console output from the last launched editor or running project. Returns the last N lines of captured stdout/stderr.',
           inputSchema: {
@@ -1081,6 +1239,10 @@ class GodotServer {
           return await this.handleGetGodotVersion();
         case 'list_projects':
           return await this.handleListProjects(request.params.arguments);
+        case 'get_main_scene':
+          return await this.handleGetMainScene(request.params.arguments);
+        case 'list_scenes':
+          return await this.handleListScenes(request.params.arguments);
         case 'get_project_info':
           return await this.handleGetProjectInfo(request.params.arguments);
         case 'create_scene':
@@ -1097,6 +1259,12 @@ class GodotServer {
           return await this.handleGetUid(request.params.arguments);
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
+        case 'get_scene_tree':
+          return await this.handleGetSceneTree(request.params.arguments);
+        case 'run_scene':
+          return await this.handleRunScene(request.params.arguments);
+        case 'reload_project':
+          return await this.handleReloadProject();
         case 'view_log':
           return await this.handleViewLog(request.params.arguments);
         case 'quit_godot':
@@ -1298,7 +1466,18 @@ class GodotServer {
         }
       });
 
-      this.activeProcess = { process, output, errors };
+      this.activeProcess = {
+        process,
+        output,
+        errors,
+        launchArgs: {
+          projectPath: args.projectPath,
+          scene: args.scene,
+          godotPath: args.godotPath ?? godotPath,
+          waitForLog: args.waitForLog,
+          readyTimeoutMs: args.readyTimeoutMs,
+        },
+      };
 
       if (typeof args.waitForLog === 'string' && args.waitForLog.trim()) {
         const readyTimeoutMs =
@@ -1649,11 +1828,9 @@ class GodotServer {
       // Extract project name from project.godot file
       let projectName = basename(args.projectPath);
       try {
-        const fs = require('fs');
-        const projectFileContent = fs.readFileSync(projectFile, 'utf8');
-        const configNameMatch = projectFileContent.match(/config\/name="([^"]+)"/);
-        if (configNameMatch && configNameMatch[1]) {
-          projectName = configNameMatch[1];
+        const extractedName = this.extractProjectNameFromConfig(this.readProjectConfig(args.projectPath));
+        if (extractedName) {
+          projectName = extractedName;
           this.logDebug(`Found project name in config: ${projectName}`);
         }
       } catch (error) {
@@ -2291,6 +2468,267 @@ class GodotServer {
         },
       ],
     };
+  }
+
+  /**
+   * Handle the run_scene tool
+   */
+  private async handleRunScene(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.scenePath) {
+      return this.createErrorResponse(
+        'Scene path is required',
+        ['Provide a valid res:// scene path to run']
+      );
+    }
+
+    if (!this.validatePath(args.scenePath)) {
+      return this.createErrorResponse(
+        'Invalid scene path',
+        ['Provide a valid res:// scene path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    return await this.handleRunProject({
+      ...args,
+      scene: args.scenePath,
+    });
+  }
+
+  /**
+   * Handle the reload_project tool
+   */
+  private async handleReloadProject() {
+    if (!this.activeProcess) {
+      return this.createErrorResponse(
+        'No active Godot project to reload.',
+        [
+          'Use run_project or run_scene first',
+          'The process may have already terminated',
+        ]
+      );
+    }
+
+    const launchArgs = { ...this.activeProcess.launchArgs };
+    this.logDebug(`Reloading Godot project with launch args: ${JSON.stringify(launchArgs)}`);
+
+    this.activeProcess.process.kill();
+    this.activeProcess = null;
+
+    return await this.handleRunProject(launchArgs);
+  }
+
+  /**
+   * Handle the get_main_scene tool
+   */
+  private async handleGetMainScene(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    try {
+      const projectFile = join(args.projectPath, 'project.godot');
+      if (!existsSync(projectFile)) {
+        return this.createErrorResponse(
+          `Not a valid Godot project: ${args.projectPath}`,
+          [
+            'Ensure the path points to a directory containing a project.godot file',
+            'Use list_projects to find valid Godot projects',
+          ]
+        );
+      }
+
+      const mainScene = this.extractMainSceneFromConfig(this.readProjectConfig(args.projectPath));
+      if (!mainScene) {
+        return this.createErrorResponse(
+          'No main scene is configured for this project.',
+          ['Set application/run/main_scene in project.godot or provide a scene directly to run_scene']
+        );
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: mainScene,
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.createErrorResponse(
+        `Failed to get main scene: ${error?.message || 'Unknown error'}`,
+        ['Verify the project path is accessible and project.godot is readable']
+      );
+    }
+  }
+
+  /**
+   * Handle the list_scenes tool
+   */
+  private async handleListScenes(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    try {
+      const projectFile = join(args.projectPath, 'project.godot');
+      if (!existsSync(projectFile)) {
+        return this.createErrorResponse(
+          `Not a valid Godot project: ${args.projectPath}`,
+          [
+            'Ensure the path points to a directory containing a project.godot file',
+            'Use list_projects to find valid Godot projects',
+          ]
+        );
+      }
+
+      const scenes = this.listScenePaths(args.projectPath);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(scenes, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.createErrorResponse(
+        `Failed to list scenes: ${error?.message || 'Unknown error'}`,
+        ['Verify the project path is accessible and contains readable scene files']
+      );
+    }
+  }
+
+  /**
+   * Handle the get_scene_tree tool
+   */
+  private async handleGetSceneTree(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    if (args.scenePath && !this.validatePath(args.scenePath)) {
+      return this.createErrorResponse(
+        'Invalid scene path',
+        ['Provide a valid res:// scene path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    if (args.rootNodePath && typeof args.rootNodePath !== 'string') {
+      return this.createErrorResponse(
+        'Invalid rootNodePath',
+        ['Provide rootNodePath as a string such as "." or "Player/Camera2D"']
+      );
+    }
+
+    try {
+      const resolved = await this.resolveGodotPathForArgs(args);
+      if (!resolved.ok) {
+        return resolved.response;
+      }
+
+      const projectFile = join(args.projectPath, 'project.godot');
+      if (!existsSync(projectFile)) {
+        return this.createErrorResponse(
+          `Not a valid Godot project: ${args.projectPath}`,
+          [
+            'Ensure the path points to a directory containing a project.godot file',
+            'Use list_projects to find valid Godot projects',
+          ]
+        );
+      }
+
+      const params: Record<string, unknown> = {
+        includeOwner: args.includeOwner === true,
+      };
+      if (args.scenePath) {
+        params.scenePath = args.scenePath;
+      }
+      if (args.rootNodePath) {
+        params.rootNodePath = args.rootNodePath;
+      }
+
+      const { stdout, stderr } = await this.executeOperation(
+        'get_scene_tree',
+        params,
+        args.projectPath,
+        resolved.godotPath
+      );
+
+      const sceneTreeError = this.buildOperationErrorResponse('Get scene tree', stdout, stderr, [
+        'Verify the scene path exists and loads correctly in Godot',
+        'Check that rootNodePath points to an existing node in the scene',
+      ]);
+      if (sceneTreeError) {
+        return sceneTreeError;
+      }
+
+      const result = this.extractJsonResult<{ scene_path: string; tree: unknown }>(stdout);
+      if (!result) {
+        return this.createErrorResponse(
+          'Failed to parse scene tree result from Godot.',
+          [
+            'Check the operation output for unexpected script errors',
+            'Try the scene directly in Godot to verify it loads cleanly',
+          ]
+        );
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.createErrorResponse(
+        `Failed to get scene tree: ${error?.message || 'Unknown error'}`,
+        [
+          'Ensure Godot is installed correctly',
+          'Check if the GODOT_PATH environment variable is set correctly',
+          'Verify the project path is accessible',
+        ]
+      );
+    }
   }
 
   /**

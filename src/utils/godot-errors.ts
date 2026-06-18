@@ -40,6 +40,7 @@ function classifyGodotError(lines: string[]): GodotErrorKind {
     combined.includes('unknown operation') ||
     combined.includes('failed to save') ||
     combined.includes('failed to pack') ||
+    combined.includes('not found') ||
     combined.includes('parent node not found') ||
     combined.includes('node not found')
   ) {
@@ -54,8 +55,8 @@ export function extractGodotErrorDetails(stdout: string, stderr: string): GodotE
   const stdoutLines = stdout.split(/\r?\n/);
   const relevantLines = uniqueNonEmptyLines(
     [
-      ...stderrLines.filter((line) => line.includes('[ERROR]') || /failed|error/i.test(line)),
-      ...stdoutLines.filter((line) => line.includes('[ERROR]') || /failed|error/i.test(line)),
+      ...stderrLines.filter((line) => line.includes('[ERROR]') || /failed|error|not found/i.test(line)),
+      ...stdoutLines.filter((line) => line.includes('[ERROR]') || /failed|error|not found/i.test(line)),
     ]
   );
 

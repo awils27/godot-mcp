@@ -12,6 +12,7 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   node_name: 'nodeName',
   texture_path: 'texturePath',
   node_path: 'nodePath',
+  root_node_path: 'rootNodePath',
   output_path: 'outputPath',
   mesh_item_names: 'meshItemNames',
   new_path: 'newPath',
@@ -26,6 +27,7 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   line_count: 'lineCount',
   hide_debug_overlay: 'hideDebugOverlay',
   keep_temp_file: 'keepTempFile',
+  include_owner: 'includeOwner',
 };
 
 export function buildReverseParameterMappings(

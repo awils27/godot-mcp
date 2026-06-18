@@ -32,9 +32,9 @@
 
 ## Possible New Tools
 
-- Add `get_main_scene`.
-- Add `list_scenes`.
-- Add `reload_project`.
-- Add `run_scene`.
+- [x] Add `get_main_scene`.
+- [x] Add `list_scenes`.
+- [x] Add `reload_project`.
+- [x] Add `run_scene`.
 - Add `capture_debug_state` to combine logs, scene/runtime state, and a screenshot.
-- Add `get_scene_tree` to inspect live nodes in a running project.
+- [x] Add `get_scene_tree` to inspect scene node hierarchies without running the full project window.

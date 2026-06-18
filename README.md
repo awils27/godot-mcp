@@ -274,6 +274,55 @@ Run a Godot project in debug mode and capture stdout/stderr for `get_debug_outpu
 - `view_log` returns the most recent captured lines from the last launched editor or running project.
 - Both are bounded internally, so long sessions do not grow memory without limit.
 
+### `get_main_scene`
+
+Read the configured `application/run/main_scene` value from `project.godot`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+
+### `list_scenes`
+
+List `.tscn` files in the project as `res://` paths.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+
+### `get_scene_tree`
+
+Inspect a scene file's node hierarchy without running the full project window.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+| `scenePath` | string | main scene | Optional `res://` scene path. If omitted, the project main scene is used. |
+| `rootNodePath` | string | | Optional node path inside the instantiated scene to inspect as a subtree. |
+| `includeOwner` | boolean | `false` | Include owner paths in the returned tree when available. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
+
+The response is a JSON tree with node `name`, `type`, `path`, and `children`.
+
+### `run_scene`
+
+Run a specific `res://` scene path in debug mode.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+| `scenePath` | string | required | `res://` path to the scene file to run. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
+| `waitForLog` | string | | Optional log substring to wait for before returning success. |
+| `readyTimeoutMs` | number | `10000` | Maximum time to wait for `waitForLog` before returning an error. |
+
+### `reload_project`
+
+Restart the currently tracked project using the last `run_project` or `run_scene` configuration.
+
+- Returns an error if no project is currently running under MCP control.
+- Reuses the last scene override, executable override, and ready-signal options when available.
+
 ## Smoke Testing
 
 Use the smoke-test script to exercise the MCP server over stdio against a real Godot project.
