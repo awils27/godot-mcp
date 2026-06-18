@@ -1,0 +1,10 @@
+; Engine configuration file.
+; Minimal fixture used for script validation tests.
+
+config_version=5
+
+[application]
+
+config/name="Broken Script Test"
+config/features=PackedStringArray("4.2")
+run/main_scene="res://scenes/main.tscn"

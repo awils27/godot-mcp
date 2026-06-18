@@ -12,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const FIXTURE_PROJECT = join(__dirname, '..', '..', 'tests', 'fixtures', 'capture-test-project');
+const BROKEN_SCRIPT_PROJECT = join(__dirname, '..', '..', 'tests', 'fixtures', 'broken-script-project');
 const BUILD_INDEX = join(__dirname, '..', 'index.js');
 
 type ToolContentBlock = {
@@ -121,5 +122,79 @@ test('get_editor_log returns a clean empty-state response before the editor is l
 
     assert.ok(!result.isError, `Expected success but got: ${JSON.stringify(result)}`);
     assert.equal(String(result.content[0]?.text ?? ''), '(no output captured yet)');
+  });
+});
+
+test('check_scripts validates project scripts successfully', async (t) => {
+  const godotPath = process.env.GODOT_PATH ?? resolvePreferredGodotPath();
+  if (!godotPath) {
+    t.skip('Godot not available');
+    return;
+  }
+
+  await withClient(async (client) => {
+    const result = await client.callTool({
+      name: 'check_scripts',
+      arguments: {
+        projectPath: FIXTURE_PROJECT,
+        godotPath,
+      },
+    }) as { isError?: boolean; content: ToolContentBlock[] };
+
+    assert.ok(!result.isError, `Expected success but got: ${JSON.stringify(result)}`);
+    const parsed = JSON.parse(String(result.content[0]?.text ?? '{}')) as {
+      checkedScripts: string[];
+      checkedScenes: string[];
+    };
+    assert.ok(parsed.checkedScripts.includes('res://scripts/main.gd'));
+    assert.deepEqual(parsed.checkedScenes, []);
+  });
+});
+
+test('check_scripts can validate a specific script path', async (t) => {
+  const godotPath = process.env.GODOT_PATH ?? resolvePreferredGodotPath();
+  if (!godotPath) {
+    t.skip('Godot not available');
+    return;
+  }
+
+  await withClient(async (client) => {
+    const result = await client.callTool({
+      name: 'check_scripts',
+      arguments: {
+        projectPath: FIXTURE_PROJECT,
+        scriptPath: 'res://scripts/main.gd',
+        godotPath,
+      },
+    }) as { isError?: boolean; content: ToolContentBlock[] };
+
+    assert.ok(!result.isError, `Expected success but got: ${JSON.stringify(result)}`);
+    const parsed = JSON.parse(String(result.content[0]?.text ?? '{}')) as {
+      checkedScripts: string[];
+    };
+    assert.deepEqual(parsed.checkedScripts, ['res://scripts/main.gd']);
+  });
+});
+
+test('check_scripts reports broken GDScript files as errors', async (t) => {
+  const godotPath = process.env.GODOT_PATH ?? resolvePreferredGodotPath();
+  if (!godotPath) {
+    t.skip('Godot not available');
+    return;
+  }
+
+  await withClient(async (client) => {
+    const result = await client.callTool({
+      name: 'check_scripts',
+      arguments: {
+        projectPath: BROKEN_SCRIPT_PROJECT,
+        includeScenes: true,
+        godotPath,
+      },
+    }) as { isError?: boolean; content: ToolContentBlock[] };
+
+    assert.equal(result.isError, true, `Expected failure but got: ${JSON.stringify(result)}`);
+    const combinedText = result.content.map((block) => String(block.text ?? '')).join('\n');
+    assert.match(combinedText, /broken\.gd/i);
   });
 });

@@ -1025,6 +1025,32 @@ class GodotServer {
           },
         },
         {
+          name: 'check_scripts',
+          description: 'Load GDScript files headlessly to catch parse and static typing errors.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              scriptPath: {
+                type: 'string',
+                description: 'Optional res:// path to a specific script file to validate.',
+              },
+              includeScenes: {
+                type: 'boolean',
+                description: 'Also load .tscn scenes to catch script attachment and scene load errors.',
+              },
+              godotPath: {
+                type: 'string',
+                description: 'Optional per-call override for the Godot executable path.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
           name: 'get_scene_tree',
           description: 'Inspect the node tree of a scene file without running the full project.',
           inputSchema: {
@@ -1272,6 +1298,8 @@ class GodotServer {
           return await this.handleGetUid(request.params.arguments);
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
+        case 'check_scripts':
+          return await this.handleCheckScripts(request.params.arguments);
         case 'get_scene_tree':
           return await this.handleGetSceneTree(request.params.arguments);
         case 'run_scene':
@@ -2748,6 +2776,123 @@ class GodotServer {
     } catch (error: any) {
       return this.createErrorResponse(
         `Failed to get scene tree: ${error?.message || 'Unknown error'}`,
+        [
+          'Ensure Godot is installed correctly',
+          'Check if the GODOT_PATH environment variable is set correctly',
+          'Verify the project path is accessible',
+        ]
+      );
+    }
+  }
+
+  /**
+   * Handle the check_scripts tool
+   */
+  private async handleCheckScripts(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    if (args.scriptPath && !this.validatePath(args.scriptPath)) {
+      return this.createErrorResponse(
+        'Invalid script path',
+        ['Provide a valid res:// script path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    try {
+      const resolved = await this.resolveGodotPathForArgs(args);
+      if (!resolved.ok) {
+        return resolved.response;
+      }
+
+      const projectFile = join(args.projectPath, 'project.godot');
+      if (!existsSync(projectFile)) {
+        return this.createErrorResponse(
+          `Not a valid Godot project: ${args.projectPath}`,
+          [
+            'Ensure the path points to a directory containing a project.godot file',
+            'Use list_projects to find valid Godot projects',
+          ]
+        );
+      }
+
+      const params: Record<string, unknown> = {
+        includeScenes: args.includeScenes === true,
+      };
+      if (args.scriptPath) {
+        params.scriptPath = args.scriptPath;
+      }
+
+      const { stdout, stderr } = await this.executeOperation(
+        'check_scripts',
+        params,
+        args.projectPath,
+        resolved.godotPath
+      );
+
+      const parsed = this.extractJsonResult<{
+        checked_scripts: string[];
+        failed_scripts: string[];
+        checked_scenes: string[];
+        failed_scenes: string[];
+      }>(stdout);
+
+      if (!parsed) {
+        const checkScriptsError = this.buildOperationErrorResponse('Check scripts', stdout, stderr, [
+          'Ensure the project scripts are readable and parse correctly in Godot',
+          'Try validating a specific scriptPath first to narrow down failures',
+        ]);
+        return (
+          checkScriptsError ??
+          this.createErrorResponse(
+            'Failed to parse script-check result from Godot.',
+            ['Check the Godot stderr/stdout output for parser errors']
+          )
+        );
+      }
+
+      if (parsed.failed_scripts.length > 0 || parsed.failed_scenes.length > 0) {
+        return this.createErrorResponse(
+          `Script validation failed for ${parsed.failed_scripts.length} script(s) and ${parsed.failed_scenes.length} scene(s).`,
+          [
+            ...(parsed.failed_scripts.slice(0, 3).map((path) => `Failed script: ${path}`)),
+            ...(parsed.failed_scenes.slice(0, 3).map((path) => `Failed scene: ${path}`)),
+            'Fix the reported script or scene parse/load errors in Godot and try again',
+          ]
+        );
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                checkedScripts: parsed.checked_scripts,
+                checkedScenes: parsed.checked_scenes,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.createErrorResponse(
+        `Failed to check scripts: ${error?.message || 'Unknown error'}`,
         [
           'Ensure Godot is installed correctly',
           'Check if the GODOT_PATH environment variable is set correctly',

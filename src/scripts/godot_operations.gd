@@ -73,6 +73,8 @@ func _init():
             resave_resources(params)
         "get_scene_tree":
             get_scene_tree(params)
+        "check_scripts":
+            check_scripts(params)
         "capture_screenshot":
             _capture_screenshot_async(params)
             return
@@ -1245,6 +1247,96 @@ func _build_scene_tree_dict(node: Node, include_owner: bool, current_path: Strin
     result["children"] = children
 
     return result
+
+func _collect_matching_files(base_path: String, extensions: PackedStringArray, results: Array) -> void:
+    var dir := DirAccess.open(base_path)
+    if dir == null:
+        return
+
+    dir.list_dir_begin()
+    while true:
+        var entry := dir.get_next()
+        if entry == "":
+            break
+        if entry.begins_with("."):
+            continue
+
+        var full_path := base_path.path_join(entry)
+        if dir.current_is_dir():
+            _collect_matching_files(full_path, extensions, results)
+        else:
+            for extension in extensions:
+                if full_path.to_lower().ends_with(extension):
+                    results.append(full_path)
+                    break
+    dir.list_dir_end()
+
+func check_scripts(params: Dictionary) -> void:
+    var include_scenes := bool(params.get("include_scenes", false))
+    var script_path := String(params.get("script_path", ""))
+    var script_paths: Array = []
+    var failed_scripts: Array = []
+
+    if script_path != "":
+        if not script_path.begins_with("res://"):
+            printerr("script_path must begin with res://: " + script_path)
+            quit(1)
+            return
+        script_paths.append(script_path)
+    else:
+        _collect_matching_files("res://", PackedStringArray([".gd"]), script_paths)
+
+    script_paths.sort()
+
+    for path_variant in script_paths:
+        var path := String(path_variant)
+        var loaded := load(path)
+        if loaded == null:
+            failed_scripts.append(path)
+            continue
+        if loaded is Script:
+            var reload_error := (loaded as Script).reload()
+            if reload_error != OK:
+                failed_scripts.append(path)
+
+    var checked_scenes: Array = []
+    var failed_scenes: Array = []
+    if include_scenes:
+        _collect_matching_files("res://", PackedStringArray([".tscn"]), checked_scenes)
+        checked_scenes.sort()
+        for scene_variant in checked_scenes:
+            var scene_path := String(scene_variant)
+            var packed := load(scene_path)
+            if packed == null:
+                failed_scenes.append(scene_path)
+                continue
+            if packed is PackedScene:
+                var instance = (packed as PackedScene).instantiate()
+                if instance == null:
+                    failed_scenes.append(scene_path)
+                elif instance is Node:
+                    (instance as Node).free()
+
+    var result := {
+        "checked_scripts": script_paths,
+        "failed_scripts": failed_scripts,
+        "checked_scenes": checked_scenes,
+        "failed_scenes": failed_scenes
+    }
+    print("__MCP_RESULT__:" + JSON.stringify(result))
+
+    if failed_scripts.size() > 0 or failed_scenes.size() > 0:
+        if failed_scripts.size() > 0:
+            printerr("Script check failed for: " + ", ".join(failed_scripts))
+        if failed_scenes.size() > 0:
+            printerr("Scene load check failed for: " + ", ".join(failed_scenes))
+        quit(1)
+        return
+
+    print("Script check succeeded for " + str(script_paths.size()) + " scripts.")
+    if include_scenes:
+        print("Scene load check succeeded for " + str(checked_scenes.size()) + " scenes.")
+    quit(0)
 
 func get_scene_tree(params: Dictionary) -> void:
     var scene_path := String(params.get("scene_path", ""))

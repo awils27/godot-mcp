@@ -1,18 +1,4 @@
 # Godot MCP
-
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/Coding-Solo)
-
-[![](https://badge.mcpx.dev?type=server 'MCP Server')](https://modelcontextprotocol.io/introduction)
-[![Made with Godot](https://img.shields.io/badge/Made%20with-Godot-478CBF?style=flat&logo=godot%20engine&logoColor=white)](https://godotengine.org)
-[![](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white 'Node.js')](https://nodejs.org/en/download/)
-[![](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white 'TypeScript')](https://www.typescriptlang.org/)
-
-[![](https://img.shields.io/github/last-commit/Coding-Solo/godot-mcp 'Last Commit')](https://github.com/Coding-Solo/godot-mcp/commits/main)
-[![](https://img.shields.io/github/stars/Coding-Solo/godot-mcp 'Stars')](https://github.com/Coding-Solo/godot-mcp/stargazers)
-[![](https://img.shields.io/github/forks/Coding-Solo/godot-mcp 'Forks')](https://github.com/Coding-Solo/godot-mcp/network/members)
-[![](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
-
-
 ```text
                            (((((((             (((((((
                         (((((((((((           (((((((((((
@@ -61,19 +47,33 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 
 ## Features
 
-- **Launch Godot Editor**: Open the Godot editor for a specific project
-- **Run Godot Projects**: Execute Godot projects in debug mode
-- **Capture Debug Output**: Retrieve console output and error messages
-- **Control Execution**: Start and stop Godot projects programmatically
-- **Get Godot Version**: Retrieve the installed Godot version
-- **List Godot Projects**: Find Godot projects in a specified directory
-- **Project Analysis**: Get detailed information about project structure
+- **Editor Control**:
+  - Launch the Godot editor for a specific project
+  - Capture editor-side logs separately with `get_editor_log`
+- **Runtime Control**:
+  - Run projects or specific scenes in debug mode
+  - Restart the currently tracked run with `reload_project`
+  - Stop active runs programmatically
+- **Logs and Diagnostics**:
+  - Retrieve runtime stdout/stderr with `get_debug_output`
+  - View bounded recent editor logs with `get_editor_log` or `view_log`
+  - Headlessly validate GDScript files and scene loads with `check_scripts`
+- **Project Discovery and Analysis**:
+  - Get the installed Godot version
+  - List Godot projects in a specified directory
+  - Get detailed information about project structure
+  - Read the configured main scene
+  - List available scenes in a project
 - **Scene Management**:
   - Create new scenes with specified root node types
   - Add nodes to existing scenes with customizable properties
   - Load sprites and textures into Sprite2D nodes
   - Export 3D scenes as MeshLibrary resources for GridMap
   - Save scenes with options for creating variants
+- **Scene Inspection and Visual Verification**:
+  - Inspect scene hierarchies offline with `get_scene_tree`
+  - Capture screenshots from the main scene or a specific scene
+  - Crop, scale, hide UI overlays, and keep captured PNGs for inspection
 - **UID Management** (for Godot 4.4+):
   - Get UID for specific files
   - Update UID references by resaving resources
@@ -118,18 +118,27 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
       "autoApprove": [
         "launch_editor",
         "run_project",
+        "run_scene",
+        "reload_project",
         "get_debug_output",
+        "get_editor_log",
         "stop_project",
         "get_godot_version",
         "list_projects",
         "get_project_info",
+        "get_main_scene",
+        "list_scenes",
         "create_scene",
         "add_node",
         "load_sprite",
         "export_mesh_library",
         "save_scene",
         "get_uid",
-        "update_project_uids"
+        "update_project_uids",
+        "get_scene_tree",
+        "check_scripts",
+        "capture_screenshot",
+        "capture_scene_screenshot"
       ]
     }
   }
@@ -237,6 +246,36 @@ npm run smoke-test -- --project /path/to/project --capture
 - `launch_editor`, `run_project`, `capture_screenshot`, and `capture_scene_screenshot` accept an optional `godotPath` argument when you need to force a specific executable for a single call.
 - `run_project` also accepts `waitForLog` and `readyTimeoutMs` so callers can wait for a known startup log line before treating the project as ready.
 
+## Tool Catalog
+
+Current MCP tools in this server:
+
+- `launch_editor`
+- `run_project`
+- `run_scene`
+- `reload_project`
+- `get_debug_output`
+- `get_editor_log`
+- `view_log`
+- `stop_project`
+- `quit_godot`
+- `get_godot_version`
+- `list_projects`
+- `get_project_info`
+- `get_main_scene`
+- `list_scenes`
+- `create_scene`
+- `add_node`
+- `load_sprite`
+- `export_mesh_library`
+- `save_scene`
+- `get_uid`
+- `update_project_uids`
+- `get_scene_tree`
+- `check_scripts`
+- `capture_screenshot`
+- `capture_scene_screenshot`
+
 ## Runtime Tools
 
 ### `launch_editor`
@@ -304,6 +343,19 @@ Inspect a scene file's node hierarchy without running the full project window.
 | `godotPath` | string | | Optional per-call override for the Godot executable. |
 
 The response is a JSON tree with node `name`, `type`, `path`, and `children`.
+
+### `check_scripts`
+
+Load GDScript files headlessly to catch parse and static typing errors.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+| `scriptPath` | string | | Optional `res://` path to a specific script file to validate. |
+| `includeScenes` | boolean | `false` | Also load `.tscn` scenes to catch script attachment and scene load errors. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
+
+On success, the tool returns the checked script list. On failure, it reports the scripts or scenes that could not be loaded cleanly.
 
 ### `run_scene`
 

@@ -17,6 +17,7 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   mesh_item_names: 'meshItemNames',
   new_path: 'newPath',
   file_path: 'filePath',
+  script_path: 'scriptPath',
   directory: 'directory',
   recursive: 'recursive',
   scene: 'scene',
@@ -28,6 +29,7 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   hide_debug_overlay: 'hideDebugOverlay',
   keep_temp_file: 'keepTempFile',
   include_owner: 'includeOwner',
+  include_scenes: 'includeScenes',
 };
 
 export function buildReverseParameterMappings(
