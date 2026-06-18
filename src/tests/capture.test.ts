@@ -10,7 +10,7 @@
 
 import { test, describe, before, skip } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'fs';
+import { existsSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
@@ -109,6 +109,8 @@ describe('capture tools', () => {
     const base64 = imageBlock.data as string;
     assert.ok(typeof base64 === 'string' && base64.length > 0, 'base64 data must be non-empty');
     assert.equal(imageBlock.mimeType, 'image/png', 'mimeType must be image/png');
+    const summaryText = String(content[0]?.text ?? '');
+    assert.match(summaryText, /\(\d+x\d+\)/, 'response text should include image dimensions');
 
     // Verify the PNG header bytes (89 50 4E 47) appear in the decoded data.
     const buf = Buffer.from(base64, 'base64');
@@ -137,9 +139,37 @@ describe('capture tools', () => {
     const content = result.content as Array<Record<string, unknown>>;
     const imageBlock = content.find((c) => c.type === 'image');
     assert.ok(imageBlock, 'Expected an image block in content');
+    const summaryText = String(content[0]?.text ?? '');
+    assert.match(summaryText, /\(\d+x\d+\)/, 'response text should include image dimensions');
 
     const buf = Buffer.from(imageBlock.data as string, 'base64');
     assert.equal(buf[0], 0x89, 'Response must be a valid PNG');
+  });
+
+  test('capture_screenshot can keep the temporary output file', async () => {
+    if (!godotAvailable) {
+      skip('Godot not available');
+      return;
+    }
+
+    const result = await handleCaptureScreenshot(
+      { projectPath: FIXTURE_PROJECT, waitFrames: 5, timeoutMs: 20000, keepTempFile: true },
+      {
+        godotPath,
+        operationsScriptPath: join(__dirname, '..', 'scripts', 'godot_operations.gd'),
+      }
+    ) as Record<string, unknown>;
+
+    assert.ok(!result.isError, `Expected success but got error: ${JSON.stringify(result)}`);
+
+    const content = result.content as Array<Record<string, unknown>>;
+    const summaryText = String(content[0]?.text ?? '');
+    const match = summaryText.match(/temporary file kept at ([^)]+)\)/);
+    assert.ok(match, 'response text should include a kept temporary file path');
+
+    const tempPath = match[1];
+    assert.ok(existsSync(tempPath), `temporary capture file should exist at ${tempPath}`);
+    unlinkSync(tempPath);
   });
 
   test('capture_scene_screenshot returns error for a non-existent scene', async () => {

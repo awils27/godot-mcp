@@ -916,6 +916,28 @@ class GodotServer {
                 description:
                   'Hard timeout in milliseconds (default 15000). Godot is killed if the capture takes longer.',
               },
+              crop: {
+                type: 'object',
+                description: 'Optional crop rectangle applied after capture.',
+                properties: {
+                  x: { type: 'number' },
+                  y: { type: 'number' },
+                  width: { type: 'number' },
+                  height: { type: 'number' },
+                },
+              },
+              scale: {
+                type: 'number',
+                description: 'Optional image scale factor applied after capture, such as 0.5 or 2.',
+              },
+              hideDebugOverlay: {
+                type: 'boolean',
+                description: 'Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise.',
+              },
+              keepTempFile: {
+                type: 'boolean',
+                description: 'Keep the captured PNG on disk and include its temporary path in the response text.',
+              },
             },
             required: ['projectPath'],
           },
@@ -938,6 +960,28 @@ class GodotServer {
               timeoutMs: {
                 type: 'number',
                 description: 'Hard timeout in milliseconds (default 15000).',
+              },
+              crop: {
+                type: 'object',
+                description: 'Optional crop rectangle applied after capture.',
+                properties: {
+                  x: { type: 'number' },
+                  y: { type: 'number' },
+                  width: { type: 'number' },
+                  height: { type: 'number' },
+                },
+              },
+              scale: {
+                type: 'number',
+                description: 'Optional image scale factor applied after capture, such as 0.5 or 2.',
+              },
+              hideDebugOverlay: {
+                type: 'boolean',
+                description: 'Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise.',
+              },
+              keepTempFile: {
+                type: 'boolean',
+                description: 'Keep the captured PNG on disk and include its temporary path in the response text.',
               },
             },
             required: ['projectPath', 'scenePath'],

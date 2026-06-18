@@ -1191,6 +1191,39 @@ func save_scene(params):
     else:
         printerr("Failed to pack scene: " + str(result))
 
+func _hide_debug_overlay_nodes(node: Node) -> void:
+    if node is Control:
+        (node as Control).visible = false
+
+    for child in node.get_children():
+        _hide_debug_overlay_nodes(child)
+
+func _apply_image_transforms(img: Image, params: Dictionary) -> Image:
+    var transformed := img
+
+    if params.has("crop") and params.crop is Dictionary:
+        var crop: Dictionary = params.crop
+        var x := int(crop.get("x", 0))
+        var y := int(crop.get("y", 0))
+        var width := int(crop.get("width", transformed.get_width()))
+        var height := int(crop.get("height", transformed.get_height()))
+
+        x = clamp(x, 0, transformed.get_width() - 1)
+        y = clamp(y, 0, transformed.get_height() - 1)
+        width = clamp(width, 1, transformed.get_width() - x)
+        height = clamp(height, 1, transformed.get_height() - y)
+
+        transformed = transformed.get_region(Rect2i(x, y, width, height))
+
+    if params.has("scale"):
+        var scale := float(params.get("scale", 1.0))
+        if scale > 0.0 and scale != 1.0:
+            var scaled_width := maxi(1, int(round(transformed.get_width() * scale)))
+            var scaled_height := maxi(1, int(round(transformed.get_height() * scale)))
+            transformed.resize(scaled_width, scaled_height, Image.INTERPOLATE_BILINEAR)
+
+    return transformed
+
 # Run the project main scene (or a named scene), wait N frames, capture one frame.
 # This function is a coroutine. Called without await from _init(); the main loop
 # resumes it once _init() returns. Calls quit() when done.
@@ -1231,6 +1264,12 @@ func _capture_screenshot_async(params: Dictionary) -> void:
     for _i in range(wait_frames):
         await process_frame
 
+    if params.get("hide_debug_overlay", false):
+        var scene_root := current_scene
+        if scene_root != null:
+            _hide_debug_overlay_nodes(scene_root)
+            await process_frame
+
     await RenderingServer.frame_post_draw
 
     var img: Image = root.get_texture().get_image()
@@ -1238,6 +1277,8 @@ func _capture_screenshot_async(params: Dictionary) -> void:
         log_error("Viewport returned an empty image. A real display is required (not --headless).")
         quit(1)
         return
+
+    img = _apply_image_transforms(img, params)
 
     var err = img.save_png(output_path)
     if err != OK:
@@ -1278,6 +1319,11 @@ func _capture_scene_screenshot_async(params: Dictionary) -> void:
     # Two frames: one for _ready(), one for layout to settle.
     await process_frame
     await process_frame
+
+    if params.get("hide_debug_overlay", false):
+        _hide_debug_overlay_nodes(instance)
+        await process_frame
+
     await RenderingServer.frame_post_draw
 
     var img: Image = root.get_texture().get_image()
@@ -1285,6 +1331,8 @@ func _capture_scene_screenshot_async(params: Dictionary) -> void:
         log_error("Viewport returned an empty image. A real display is required (not --headless).")
         quit(1)
         return
+
+    img = _apply_image_transforms(img, params)
 
     var err = img.save_png(output_path)
     if err != OK:

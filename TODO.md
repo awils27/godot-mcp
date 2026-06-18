@@ -2,9 +2,9 @@
 
 ## High Priority
 
-- Improve `capture_screenshot` with optional `crop`, `scale`, and `hideDebugOverlay` parameters so visual verification is cleaner.
-- Improve `capture_screenshot` and `capture_scene_screenshot` to return image dimensions and, when helpful, the temporary output path in the text response.
-- Add a reusable display-availability preflight for screenshot tools so failures are clearer before Godot launches.
+- [x] Improve `capture_screenshot` with optional `crop`, `scale`, and `hideDebugOverlay` parameters so visual verification is cleaner.
+- [x] Improve `capture_screenshot` and `capture_scene_screenshot` to return image dimensions and, when helpful, the temporary output path in the text response.
+- [x] Add a reusable display-availability preflight for screenshot tools so failures are clearer before Godot launches.
 - Add a ring buffer limit for `view_log` so long sessions do not grow memory usage without bound.
 - Improve error reporting so launch failure, scene load failure, script failure, and timeout are easier to distinguish.
 

@@ -223,7 +223,8 @@ The test suite uses Node's built-in test runner and currently focuses on the ser
 
 `capture_screenshot` and `capture_scene_screenshot` return a rendered image directly
 into the agent's context window, closing the visual feedback loop that console logs alone
-cannot provide.
+cannot provide. The response text also includes image dimensions, and `keepTempFile`
+can preserve the underlying PNG on disk for manual inspection.
 
 **Example prompts:**
 - "Capture a screenshot of my player scene at res://scenes/player.tscn so I can check the sprite position."
@@ -240,6 +241,10 @@ Run a scene (or the project main scene) and capture one rendered frame.
 | `scenePath` | string | | `res://` path to a `.tscn` to run. Omit to use the project main scene. |
 | `waitFrames` | number | `10` | Frames to render before capture. Lets shaders, physics, and layout settle. |
 | `timeoutMs` | number | `15000` | Hard timeout in ms. Godot is killed if capture takes longer. |
+| `crop` | object | | Optional crop rectangle with `x`, `y`, `width`, and `height` applied after capture. |
+| `scale` | number | | Optional post-capture scale factor such as `0.5` or `2`. |
+| `hideDebugOverlay` | boolean | `false` | Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise. |
+| `keepTempFile` | boolean | `false` | Keeps the temporary PNG on disk and includes its path in the response text. |
 
 ### `capture_scene_screenshot`
 
@@ -250,6 +255,10 @@ Load a specific `.tscn` file and capture one frame without running the full proj
 | `projectPath` | string | required | Directory containing `project.godot` |
 | `scenePath` | string | required | `res://` path to the `.tscn` file |
 | `timeoutMs` | number | `15000` | Hard timeout in ms. |
+| `crop` | object | | Optional crop rectangle with `x`, `y`, `width`, and `height` applied after capture. |
+| `scale` | number | | Optional post-capture scale factor such as `0.5` or `2`. |
+| `hideDebugOverlay` | boolean | `false` | Temporarily hides Control-based UI before capture to reduce HUD/debug overlay noise. |
+| `keepTempFile` | boolean | `false` | Keeps the temporary PNG on disk and includes its path in the response text. |
 
 ### Rendering context requirement
 
@@ -280,6 +289,7 @@ renderer produces actual pixels.
 
 | Error message | Likely cause | Fix |
 |---------------|--------------|-----|
+| `No graphical display detected` | Linux session has no DISPLAY/WAYLAND display | Run under `xvfb-run` or on a desktop session |
 | `Viewport returned an empty image` | Headless Linux, no virtual display | Use `xvfb-run` (see above) |
 | `Failed to load scene` | Wrong `scenePath` | Confirm `res://` prefix and that the file exists |
 | `timed out after 15000ms` | Scene loading slowly or crash | Increase `timeoutMs` or run `run_project` first to see errors |
