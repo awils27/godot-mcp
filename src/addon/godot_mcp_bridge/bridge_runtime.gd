@@ -198,6 +198,36 @@ func _collect_property_names(node: Node, requested_names: Array) -> PackedString
         names.append(default_name)
     return names
 
+func _get_node_property_value(node: Node, property_name: String):
+    match property_name:
+        "visible":
+            if node is CanvasItem or node is Node3D:
+                return node.visible
+        "process_mode":
+            return node.process_mode
+        "position":
+            if node is Node2D or node is Node3D:
+                return node.position
+        "rotation":
+            if node is Node2D or node is Node3D:
+                return node.rotation
+        "scale":
+            if node is Node2D or node is Node3D:
+                return node.scale
+        "global_position":
+            if node is Node2D or node is Node3D:
+                return node.global_position
+        "global_rotation":
+            if node is Node2D or node is Node3D:
+                return node.global_rotation
+        "global_scale":
+            if node is Node2D:
+                return node.global_transform.get_scale()
+            if node is Node3D:
+                return node.global_transform.basis.get_scale()
+
+    return node.get(property_name)
+
 func _serialize_node_state(node: Node, params: Dictionary) -> Dictionary:
     var requested_properties: Array = params.get("property_names", [])
     if typeof(requested_properties) != TYPE_ARRAY:
@@ -205,7 +235,7 @@ func _serialize_node_state(node: Node, params: Dictionary) -> Dictionary:
 
     var properties := {}
     for property_name in _collect_property_names(node, requested_properties):
-        var property_value = node.get(property_name)
+        var property_value = _get_node_property_value(node, property_name)
         properties[property_name] = _serialize_value(property_value)
 
     return {
