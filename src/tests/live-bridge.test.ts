@@ -256,6 +256,28 @@ test('live bridge tools inspect a running addon-enabled project', async (t) => {
         assert.equal(snapshot.nodeState.name, 'Player');
         assert.ok(Array.isArray(snapshot.recentRuntimeLogs.stdout));
         assert.ok(Array.isArray(snapshot.recentRuntimeLogs.stderr));
+
+        const runtimeState = await callToolJson(client, 'capture_runtime_state', {
+          projectPath,
+          rootNodePath: '.',
+          nodePaths: ['.', 'Player'],
+          propertyNames: ['position'],
+          variableNames: ['train_name', 'runtime_status'],
+          includeScriptVariables: true,
+          includePropertyList: true,
+          includeValues: true,
+          scriptOnly: true,
+          maxNodes: 25,
+          maxVariablesPerNode: 10,
+        });
+        assert.equal(runtimeState.currentScene.currentScenePath, 'res://scenes/main.tscn');
+        assert.ok(Array.isArray(runtimeState.nodes));
+        assert.equal(runtimeState.nodes.length, 2);
+        assert.equal(runtimeState.nodes[0].nodeState.name, 'Main');
+        assert.equal(runtimeState.nodes[0].variables.train_name, 'Comet');
+        assert.equal(runtimeState.nodes[0].variables.runtime_status, 'ready');
+        assert.ok(Array.isArray(runtimeState.nodes[0].propertyList));
+        assert.ok(Array.isArray(runtimeState.recentRuntimeLogs.stdout));
       } finally {
         await client.callTool({
           name: 'stop_project',

@@ -36,6 +36,10 @@ export const PARAMETER_MAPPINGS: Record<string, string> = {
   include_values: 'includeValues',
   script_only: 'scriptOnly',
   variable_names: 'variableNames',
+  node_paths: 'nodePaths',
+  include_script_variables: 'includeScriptVariables',
+  include_property_list: 'includePropertyList',
+  max_variables_per_node: 'maxVariablesPerNode',
 };
 
 export function buildReverseParameterMappings(

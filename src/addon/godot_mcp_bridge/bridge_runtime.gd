@@ -102,6 +102,8 @@ func _handle_request(message: Dictionary) -> void:
             _send_response(request_id, true, _list_live_groups_payload(params))
         "capture_debug_state":
             _send_response(request_id, true, _capture_debug_state_payload(params))
+        "capture_runtime_state":
+            _send_payload_response(request_id, _capture_runtime_state_payload(params))
         _:
             _send_response(request_id, false, null, "Unknown live bridge command: " + command)
 
@@ -365,6 +367,25 @@ func _serialize_node_state(node: Node, params: Dictionary) -> Dictionary:
         "properties": properties
     }
 
+func _get_node_paths_from_params(params: Dictionary) -> Array[String]:
+    var node_paths: Array[String] = []
+    var requested_paths = params.get("node_paths", [])
+    if typeof(requested_paths) == TYPE_ARRAY:
+        for path_variant in requested_paths:
+            node_paths.append(String(path_variant))
+    return node_paths
+
+func _limit_property_list_entries(entries: Array, max_entries: int) -> Dictionary:
+    if max_entries <= 0 or entries.size() <= max_entries:
+        return {
+            "entries": entries,
+            "truncated": false
+        }
+    return {
+        "entries": entries.slice(0, max_entries),
+        "truncated": true
+    }
+
 func _get_live_property_list_payload(params: Dictionary) -> Dictionary:
     var node := _resolve_node(params)
     if node == null:
@@ -524,4 +545,66 @@ func _capture_debug_state_payload(params: Dictionary) -> Dictionary:
         payload["nodeState"] = _serialize_node_state(node, params)
 
     payload["groups"] = _list_live_groups_payload({"include_members": true}).get("groups", {})
+    return payload
+
+func _capture_runtime_state_payload(params: Dictionary) -> Dictionary:
+    var current_scene := _get_current_scene()
+    if current_scene == null:
+        return {
+            "error": "No live scene is available."
+        }
+
+    var payload := {
+        "currentScene": _get_live_main_scene_payload(),
+        "sceneTree": _get_live_scene_tree_payload(params),
+    }
+
+    var selected_node_paths := _get_node_paths_from_params(params)
+    if selected_node_paths.is_empty():
+        selected_node_paths.append(String(params.get("root_node_path", ".")))
+
+    var include_script_variables := bool(params.get("include_script_variables", true))
+    var include_property_list := bool(params.get("include_property_list", false))
+    var max_variables_per_node := int(params.get("max_variables_per_node", 50))
+    if max_variables_per_node <= 0:
+        max_variables_per_node = 50
+
+    var nodes: Array = []
+    for requested_node_path in selected_node_paths:
+        var node_params := params.duplicate(true)
+        node_params.erase("root_node_path")
+        node_params["node_path"] = requested_node_path
+        var node := _resolve_node(node_params)
+        if node == null:
+            nodes.append({
+                "nodePath": requested_node_path,
+                "error": "Target node not found in the live scene tree."
+            })
+            continue
+
+        var node_snapshot := {
+            "nodePath": str(node.get_path()),
+            "nodeState": _serialize_node_state(node, params),
+        }
+
+        if include_script_variables:
+            var script_payload := _get_live_script_variables_payload(node_params)
+            var limited_variables := _limit_property_list_entries(script_payload.get("propertyList", []), max_variables_per_node)
+            node_snapshot["script"] = script_payload.get("script", null)
+            node_snapshot["variables"] = script_payload.get("variables", {})
+            node_snapshot["variableList"] = limited_variables["entries"]
+            node_snapshot["variablesTruncated"] = limited_variables["truncated"]
+
+        if include_property_list:
+            var property_payload := _get_live_property_list_payload(node_params)
+            var limited_properties := _limit_property_list_entries(property_payload.get("properties", []), max_variables_per_node)
+            node_snapshot["propertyList"] = limited_properties["entries"]
+            node_snapshot["propertyListTruncated"] = limited_properties["truncated"]
+
+        nodes.append(node_snapshot)
+
+    payload["nodes"] = nodes
+    payload["groups"] = _list_live_groups_payload({
+        "include_members": bool(params.get("include_members", true))
+    }).get("groups", {})
     return payload

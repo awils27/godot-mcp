@@ -1564,6 +1564,71 @@ class GodotServer {
           },
         },
         {
+          name: 'capture_runtime_state',
+          description: 'Capture a bounded live runtime snapshot including scene state, selected nodes, and script variables.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              rootNodePath: {
+                type: 'string',
+                description: 'Optional subtree root to inspect for the scene tree.',
+              },
+              nodePaths: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional node paths to include as detailed node snapshots.',
+              },
+              propertyNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional property names to include in node state payloads.',
+              },
+              variableNames: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional script variable names to include.',
+              },
+              includeOwner: {
+                type: 'boolean',
+                description: 'Include owner paths in returned tree nodes when available.',
+              },
+              includeMembers: {
+                type: 'boolean',
+                description: 'Include group member node paths in the returned group map.',
+              },
+              includeScriptVariables: {
+                type: 'boolean',
+                description: 'Include script-variable payloads for selected nodes.',
+              },
+              includePropertyList: {
+                type: 'boolean',
+                description: 'Include detailed property-list metadata for selected nodes.',
+              },
+              includeValues: {
+                type: 'boolean',
+                description: 'Include current serialized values when includePropertyList is enabled.',
+              },
+              scriptOnly: {
+                type: 'boolean',
+                description: 'When includePropertyList is enabled, only include script-defined properties.',
+              },
+              maxNodes: {
+                type: 'number',
+                description: 'Maximum node count to include in the returned scene tree.',
+              },
+              maxVariablesPerNode: {
+                type: 'number',
+                description: 'Maximum property/variable entries to include per selected node before truncation.',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
           name: 'run_scene',
           description: 'Run a specific Godot scene in debug mode and capture output.',
           inputSchema: {
@@ -1809,6 +1874,8 @@ class GodotServer {
           return await this.handleListLiveGroups(request.params.arguments);
         case 'capture_debug_state':
           return await this.handleCaptureDebugState(request.params.arguments);
+        case 'capture_runtime_state':
+          return await this.handleCaptureRuntimeState(request.params.arguments);
         case 'run_scene':
           return await this.handleRunScene(request.params.arguments);
         case 'reload_project':
@@ -3587,6 +3654,58 @@ class GodotServer {
     const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
       args.projectPath,
       'capture_debug_state',
+      bridgeParams
+    );
+    if (!result.ok) {
+      return result.response;
+    }
+
+    const payload = { ...result.payload } as Record<string, unknown>;
+    const activeProcess = this.activeProcess;
+    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath) {
+      payload.recentRuntimeLogs = {
+        stdout: activeProcess.output.tail(50),
+        stderr: activeProcess.errors.tail(50),
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(payload, null, 2),
+        },
+      ],
+    };
+  }
+
+  private async handleCaptureRuntimeState(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    const bridgeParams = this.convertCamelToSnakeCase({
+      rootNodePath: args.rootNodePath,
+      nodePaths: Array.isArray(args.nodePaths) ? args.nodePaths : undefined,
+      propertyNames: Array.isArray(args.propertyNames) ? args.propertyNames : undefined,
+      variableNames: Array.isArray(args.variableNames) ? args.variableNames : undefined,
+      includeOwner: args.includeOwner,
+      includeMembers: args.includeMembers,
+      includeScriptVariables: args.includeScriptVariables,
+      includePropertyList: args.includePropertyList,
+      includeValues: args.includeValues,
+      scriptOnly: args.scriptOnly,
+      maxNodes: args.maxNodes,
+      maxVariablesPerNode: args.maxVariablesPerNode,
+    });
+    const result = await this.withLiveBridgeRequest<Record<string, unknown>>(
+      args.projectPath,
+      'capture_runtime_state',
       bridgeParams
     );
     if (!result.ok) {
