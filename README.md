@@ -237,6 +237,70 @@ npm run smoke-test -- --project /path/to/project --capture
 - `launch_editor`, `run_project`, `capture_screenshot`, and `capture_scene_screenshot` accept an optional `godotPath` argument when you need to force a specific executable for a single call.
 - `run_project` also accepts `waitForLog` and `readyTimeoutMs` so callers can wait for a known startup log line before treating the project as ready.
 
+## Runtime Tools
+
+### `launch_editor`
+
+Launch the Godot editor for a project.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
+
+### `run_project`
+
+Run a Godot project in debug mode and capture stdout/stderr for `get_debug_output` and `view_log`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `projectPath` | string | required | Directory containing `project.godot`. |
+| `scene` | string | | Optional scene to run instead of the configured main scene. |
+| `godotPath` | string | | Optional per-call override for the Godot executable. |
+| `waitForLog` | string | | Optional log substring to wait for before returning success. |
+| `readyTimeoutMs` | number | `10000` | Maximum time to wait for `waitForLog` before returning an error. |
+
+**Example uses:**
+- Start the project and return immediately:
+  `run_project({ projectPath: "C:\\Projects\\MyGame" })`
+- Wait until your game prints a ready line:
+  `run_project({ projectPath: "C:\\Projects\\MyGame", waitForLog: "READY", readyTimeoutMs: 15000 })`
+- Force a specific executable for one run:
+  `run_project({ projectPath: "C:\\Projects\\MyGame", godotPath: "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe" })`
+
+### `get_debug_output` and `view_log`
+
+- `get_debug_output` returns structured JSON-like output for the currently running project.
+- `view_log` returns the most recent captured lines from the last launched editor or running project.
+- Both are bounded internally, so long sessions do not grow memory without limit.
+
+## Smoke Testing
+
+Use the smoke-test script to exercise the MCP server over stdio against a real Godot project.
+
+Basic check:
+
+```bash
+npm run smoke-test -- --project /path/to/project
+```
+
+Exercise project startup and wait for a known ready line:
+
+```bash
+npm run smoke-test -- --project /path/to/project --run-project --wait-for-log READY --ready-timeout-ms 15000
+```
+
+Exercise screenshot capture too:
+
+```bash
+npm run smoke-test -- --project /path/to/project --capture --wait-frames 20
+```
+
+Force a specific Godot executable for the smoke test:
+
+```bash
+npm run smoke-test -- --project /path/to/project --godot-path "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot Engine\\godot.windows.opt.tools.64.exe"
+```
 
 ## Visual Debugging
 
