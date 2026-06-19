@@ -1039,7 +1039,7 @@ class GodotServer {
         },
         {
           name: 'get_debug_output',
-          description: 'Get the current debug output and errors',
+          description: 'Get the current debug output and errors for the tracked runtime session. After you are done inspecting the run, call stop_project so the game is not left running.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -1048,7 +1048,7 @@ class GodotServer {
         },
         {
           name: 'stop_project',
-          description: 'Stop the currently running Godot project',
+          description: 'Stop the currently running Godot project. Call this after run_project or run_scene once you are done inspecting the runtime.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -1687,7 +1687,7 @@ class GodotServer {
         },
         {
           name: 'get_editor_log',
-          description: 'Get recent console output from the Godot editor process launched by this MCP server.',
+          description: 'Get recent console output from the Godot editor process launched by this MCP server. After you are done with the editor session, call quit_godot so the editor is not left open.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1700,7 +1700,7 @@ class GodotServer {
         },
         {
           name: 'view_log',
-          description: 'View recent console output from the last launched editor or running project. Returns the last N lines of captured stdout/stderr.',
+          description: 'View recent console output from the last launched editor or running project. This is mainly for editor logs here, and you should still call quit_godot or stop_project when you are finished.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1713,7 +1713,7 @@ class GodotServer {
         },
         {
           name: 'quit_godot',
-          description: 'Close the Godot editor that was launched by this MCP server via launch_editor. Only closes editors spawned by this server.',
+          description: 'Close the Godot editor that was launched by this MCP server via launch_editor. Call this when you are finished with the editor session so it is not left open. Only closes editors spawned by this server.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -2232,21 +2232,20 @@ class GodotServer {
       );
     }
 
-    return {
-      content: [
+    return this.createSuccessResponse(
+      JSON.stringify(
         {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              output: this.activeProcess.output.toArray(),
-              errors: this.activeProcess.errors.toArray(),
-            },
-            null,
-            2
-          ),
+          output: this.activeProcess.output.toArray(),
+          errors: this.activeProcess.errors.toArray(),
         },
-      ],
-    };
+        null,
+        2
+      ),
+      [
+        'Call stop_project when you are finished inspecting this runtime session',
+        'If the live bridge is enabled, you can also call get_live_bridge_status or capture_runtime_state next',
+      ]
+    );
   }
 
   /**
@@ -3135,14 +3134,13 @@ class GodotServer {
 
     const lines = this.editorLogLines.tail(lineCount);
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: lines.length > 0 ? lines.join('\n') : '(no output captured yet)',
-        },
-      ],
-    };
+    return this.createSuccessResponse(
+      lines.length > 0 ? lines.join('\n') : '(no output captured yet)',
+      [
+        'Call quit_godot when you are finished with the editor session',
+        'If you need to run the project instead, use run_project or run_scene after closing the editor',
+      ]
+    );
   }
 
   /**
