@@ -193,6 +193,24 @@ class GodotServer {
     return buildErrorResponse(message, possibleSolutions);
   }
 
+  private createSuccessResponse(message: string, nextSteps: string[] = []): object {
+    const content: Array<{ type: 'text'; text: string }> = [
+      {
+        type: 'text',
+        text: message,
+      },
+    ];
+
+    if (nextSteps.length > 0) {
+      content.push({
+        type: 'text',
+        text: 'Next steps:\n- ' + nextSteps.join('\n- '),
+      });
+    }
+
+    return { content };
+  }
+
   private appendLogLine(buffer: RingBuffer<string>, source: string, line: string): void {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -973,7 +991,7 @@ class GodotServer {
       tools: [
         {
           name: 'launch_editor',
-          description: 'Launch Godot editor for a specific project',
+          description: 'Launch the Godot editor for a specific project. After launching, use get_editor_log to confirm the editor opened cleanly and quit_godot when finished.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -991,7 +1009,7 @@ class GodotServer {
         },
         {
           name: 'run_project',
-          description: 'Run the Godot project and capture output',
+          description: 'Run a Godot project and start tracking its runtime output. After launching, use get_debug_output to verify startup and stop_project when finished.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1273,7 +1291,7 @@ class GodotServer {
         },
         {
           name: 'install_live_bridge',
-          description: 'Install the optional live inspection addon into a Godot project.',
+          description: 'Install the optional live inspection addon into a Godot project. Typical live workflow: install, enable, run_project or run_scene, check get_live_bridge_status, then call live inspection tools.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1287,7 +1305,7 @@ class GodotServer {
         },
         {
           name: 'enable_live_bridge',
-          description: 'Enable the live inspection addon and runtime autoload for a Godot project.',
+          description: 'Enable the live inspection addon and runtime autoload for a Godot project. After enabling, start the project and confirm get_live_bridge_status reaches connected_ready before using live inspection tools.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1329,7 +1347,7 @@ class GodotServer {
         },
         {
           name: 'get_live_bridge_status',
-          description: 'Get install/enable/runtime status for the optional live inspection addon.',
+          description: 'Get install, enablement, and runtime-connection status for the optional live inspection addon. Use this to confirm the bridge is connected_ready before calling live scene or variable inspection tools.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1413,7 +1431,7 @@ class GodotServer {
         },
         {
           name: 'get_live_scene_tree',
-          description: 'Inspect the live node hierarchy from an addon-enabled running project.',
+          description: 'Inspect the live node hierarchy from an addon-enabled running project. Call get_live_bridge_status first to confirm the bridge is connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1439,7 +1457,7 @@ class GodotServer {
         },
         {
           name: 'get_live_node_state',
-          description: 'Inspect a specific live node in an addon-enabled running project.',
+          description: 'Inspect a specific live node in an addon-enabled running project. Use after get_live_bridge_status reports connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1462,7 +1480,7 @@ class GodotServer {
         },
         {
           name: 'get_live_property_list',
-          description: 'List accessible live properties for a node in an addon-enabled running project.',
+          description: 'List accessible live properties for a node in an addon-enabled running project. Use after get_live_bridge_status reports connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1493,7 +1511,7 @@ class GodotServer {
         },
         {
           name: 'get_live_script_variables',
-          description: 'Inspect script-defined live variables for a node in an addon-enabled running project.',
+          description: 'Inspect script-defined live variables for a node in an addon-enabled running project. Use after get_live_bridge_status reports connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1534,7 +1552,7 @@ class GodotServer {
         },
         {
           name: 'capture_debug_state',
-          description: 'Capture a combined live debug snapshot from an addon-enabled running project.',
+          description: 'Capture a combined live debug snapshot from an addon-enabled running project. Use after get_live_bridge_status reports connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1565,7 +1583,7 @@ class GodotServer {
         },
         {
           name: 'capture_runtime_state',
-          description: 'Capture a bounded live runtime snapshot including scene state, selected nodes, and script variables.',
+          description: 'Capture a bounded live runtime snapshot including scene state, selected nodes, script variables, and recent logs. Use after get_live_bridge_status reports connected_ready.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1630,7 +1648,7 @@ class GodotServer {
         },
         {
           name: 'run_scene',
-          description: 'Run a specific Godot scene in debug mode and capture output.',
+          description: 'Run a specific Godot scene in debug mode and start tracking its runtime output. After launching, use get_debug_output to verify startup and stop_project when finished.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1660,7 +1678,7 @@ class GodotServer {
         },
         {
           name: 'reload_project',
-          description: 'Restart the currently tracked Godot project using the last run configuration.',
+          description: 'Restart the currently tracked Godot project using the last run configuration. This affects the active tracked runtime session and should usually be followed by get_debug_output or get_live_bridge_status.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -1705,7 +1723,7 @@ class GodotServer {
         {
           name: 'capture_screenshot',
           description:
-            'Run a Godot scene and capture a screenshot of the rendered output. Returns the image so the agent can visually verify the scene. Requires a real display (not --headless). On headless Linux, wrap Godot with xvfb-run.',
+            'Run a Godot scene and capture a screenshot of the rendered output. Prefer this over just opening the editor when you need visual verification. Returns the image so the agent can verify the scene. Requires a real display (not --headless). On headless Linux, wrap Godot with xvfb-run.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1761,7 +1779,7 @@ class GodotServer {
         {
           name: 'capture_scene_screenshot',
           description:
-            'Load a specific .tscn scene file and capture one rendered frame without running the full project. Returns the image for visual inspection. Requires a real display (not --headless).',
+            'Load a specific .tscn scene file and capture one rendered frame without running the full project. Prefer this over just opening the editor when you need visual verification of a scene. Returns the image for visual inspection. Requires a real display (not --headless).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1988,12 +2006,13 @@ class GodotServer {
       });
 
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Godot editor launched for project at ${args.projectPath} using ${godotPath}. Use get_editor_log to check the console output.`,
-          },
-        ],
+        ...this.createSuccessResponse(
+          `Godot editor launched for project at ${args.projectPath} using ${godotPath}.`,
+          [
+            'Call get_editor_log to confirm the editor opened cleanly',
+            'Use quit_godot when you are finished with the editor session',
+          ]
+        ),
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -2155,22 +2174,36 @@ class GodotServer {
         }
 
         return {
-          content: [
-            {
-              type: 'text',
-              text: `Godot project started and reported ready via log match "${args.waitForLog}" on line: ${waitResult.matchedLine}`,
-            },
-          ],
+          ...this.createSuccessResponse(
+            `Godot project started and reported ready via log match "${args.waitForLog}" on line: ${waitResult.matchedLine}`,
+            liveBridge
+              ? [
+                  'Call get_live_bridge_status to confirm the live bridge reaches connected_ready',
+                  'Use get_debug_output to inspect runtime output',
+                  'Use stop_project when you are finished with the runtime session',
+                ]
+              : [
+                  'Call get_debug_output to inspect runtime output',
+                  'Use stop_project when you are finished with the runtime session',
+                ]
+          ),
         };
       }
 
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Godot project started in debug mode using ${godotPath}. Use get_debug_output to see output.`,
-          },
-        ],
+        ...this.createSuccessResponse(
+          `Godot project started in debug mode using ${godotPath}.`,
+          liveBridge
+            ? [
+                'Call get_live_bridge_status to confirm the live bridge reaches connected_ready',
+                'Use get_debug_output to inspect runtime output',
+                'Use stop_project when you are finished with the runtime session',
+              ]
+            : [
+                'Use get_debug_output to inspect runtime output',
+                'Use stop_project when you are finished with the runtime session',
+              ]
+        ),
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -2239,11 +2272,9 @@ class GodotServer {
     }
     this.activeProcess = null;
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
+      return {
+        ...this.createSuccessResponse(
+          JSON.stringify(
             {
               message: 'Godot project stopped',
               finalOutput: output,
@@ -2252,9 +2283,12 @@ class GodotServer {
             null,
             2
           ),
-        },
-      ],
-    };
+          [
+            'Use run_project or run_scene to start a new runtime session',
+            'If you need the editor instead, use launch_editor and then get_editor_log',
+          ]
+        ),
+      };
   }
 
   /**
@@ -3168,11 +3202,9 @@ class GodotServer {
     });
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
+      return {
+        ...this.createSuccessResponse(
+          JSON.stringify(
             {
               message: 'Live bridge addon installed.',
               ...status,
@@ -3180,9 +3212,12 @@ class GodotServer {
             null,
             2
           ),
-        },
-      ],
-    };
+          [
+            'Call enable_live_bridge to add the autoload and enable the plugin metadata',
+            'After enabling, run_project or run_scene and then check get_live_bridge_status',
+          ]
+        ),
+      };
   }
 
   private async handleEnableLiveBridge(args: any) {
@@ -3230,19 +3265,20 @@ class GodotServer {
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              message: 'Live bridge addon enabled.',
-              ...status,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      ...this.createSuccessResponse(
+        JSON.stringify(
+          {
+            message: 'Live bridge addon enabled.',
+            ...status,
+          },
+          null,
+          2
+        ),
+        [
+          'Call run_project or run_scene to start a runtime session',
+          'Then call get_live_bridge_status until the bridge reaches connected_ready',
+        ]
+      ),
     };
   }
 
@@ -3300,19 +3336,20 @@ class GodotServer {
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              message: 'Live bridge addon disabled.',
-              ...status,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      ...this.createSuccessResponse(
+        JSON.stringify(
+          {
+            message: 'Live bridge addon disabled.',
+            ...status,
+          },
+          null,
+          2
+        ),
+        [
+          'Call enable_live_bridge to restore live inspection support',
+          'Or call uninstall_live_bridge to remove the addon from the project entirely',
+        ]
+      ),
     };
   }
 
@@ -3372,19 +3409,19 @@ class GodotServer {
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              message: 'Live bridge addon uninstalled.',
-              ...status,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      ...this.createSuccessResponse(
+        JSON.stringify(
+          {
+            message: 'Live bridge addon uninstalled.',
+            ...status,
+          },
+          null,
+          2
+        ),
+        [
+          'Call install_live_bridge if you want to restore live inspection support later',
+        ]
+      ),
     };
   }
 
@@ -3424,19 +3461,23 @@ class GodotServer {
         : null;
 
     return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              ...status,
-              runtime,
-            },
-            null,
-            2
-          ),
-        },
-      ],
+      ...this.createSuccessResponse(
+        JSON.stringify(
+          {
+            ...status,
+            runtime,
+          },
+          null,
+          2
+        ),
+        status.status === 'not_installed'
+          ? ['Call install_live_bridge, then enable_live_bridge, then run_project or run_scene']
+          : status.status === 'installed_disabled'
+            ? ['Call enable_live_bridge, then run_project or run_scene']
+            : status.status === 'enabled_no_runtime_session'
+              ? ['Call run_project or run_scene, then poll get_live_bridge_status until connected_ready']
+              : ['Call live inspection tools such as get_live_scene_tree, get_live_script_variables, or capture_runtime_state']
+      ),
     };
   }
 
@@ -4220,7 +4261,10 @@ class GodotServer {
     if (!this.editorProcess) {
       return this.createErrorResponse(
         'No Godot editor process is currently tracked',
-        ['The editor may have been closed already, or launch_editor was not used to start it']
+        [
+          'Use launch_editor to start a tracked editor session first',
+          'The editor may have been closed already, or launch_editor was not used to start it',
+        ]
       );
     }
 
@@ -4237,14 +4281,13 @@ class GodotServer {
       this.editorProcess = null;
     }
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: 'Godot editor closed successfully.',
-        },
-      ],
-    };
+    return this.createSuccessResponse(
+      'Godot editor closed successfully.',
+      [
+        'Use launch_editor to start a new editor session if needed',
+        'If you want to run the project instead, use run_project or run_scene',
+      ]
+    );
   }
 
   /**
