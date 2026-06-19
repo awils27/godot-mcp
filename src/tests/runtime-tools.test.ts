@@ -196,5 +196,6 @@ test('check_scripts reports broken GDScript files as errors', async (t) => {
     assert.equal(result.isError, true, `Expected failure but got: ${JSON.stringify(result)}`);
     const combinedText = result.content.map((block) => String(block.text ?? '')).join('\n');
     assert.match(combinedText, /broken\.gd/i);
+    assert.match(combinedText, /Failed script detail: res:\/\/scripts\/broken\.gd/i);
   });
 });

@@ -278,6 +278,60 @@ class GodotServer {
     }
   }
 
+  private extractRelevantDiagnostics(output: string, paths: string[]): string[] {
+    if (!output.trim() || paths.length === 0) {
+      return [];
+    }
+
+    const needles = new Set<string>();
+    for (const fullPath of paths) {
+      needles.add(fullPath);
+      const normalized = fullPath.replace(/\\/g, '/');
+      needles.add(normalized);
+      const segments = normalized.split('/');
+      const basename = segments[segments.length - 1];
+      if (basename) {
+        needles.add(basename);
+      }
+    }
+
+    const lines = output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    const diagnostics: string[] = [];
+    const seen = new Set<string>();
+    for (const line of lines) {
+      if (line.startsWith('__MCP_RESULT__:')) {
+        continue;
+      }
+      const lowerLine = line.toLowerCase();
+      const matchesPath = [...needles].some((needle) => needle && line.includes(needle));
+      const looksDiagnostic =
+        lowerLine.includes('error') ||
+        lowerLine.includes('parser') ||
+        lowerLine.includes('parse') ||
+        lowerLine.includes('failed');
+      if (!matchesPath && !looksDiagnostic) {
+        continue;
+      }
+      if (!matchesPath && !/res:\/\//i.test(line)) {
+        continue;
+      }
+      if (seen.has(line)) {
+        continue;
+      }
+      seen.add(line);
+      diagnostics.push(line);
+      if (diagnostics.length >= 6) {
+        break;
+      }
+    }
+
+    return diagnostics;
+  }
+
   private async resolveGodotPathForArgs(
     args: Record<string, unknown> | undefined
   ): Promise<{ ok: true; godotPath: string } | { ok: false; response: object }> {
@@ -4095,8 +4149,10 @@ class GodotServer {
       const parsed = this.extractJsonResult<{
         checked_scripts: string[];
         failed_scripts: string[];
+        failed_script_details?: Array<{ path: string; reason: string; error_code?: number }>;
         checked_scenes: string[];
         failed_scenes: string[];
+        failed_scene_details?: Array<{ path: string; reason: string; error_code?: number }>;
       }>(stdout);
 
       if (!parsed) {
@@ -4114,11 +4170,27 @@ class GodotServer {
       }
 
       if (parsed.failed_scripts.length > 0 || parsed.failed_scenes.length > 0) {
+        const failedPaths = [...parsed.failed_scripts, ...parsed.failed_scenes];
+        const diagnostics = this.extractRelevantDiagnostics(`${stdout}\n${stderr}`, failedPaths);
+        const detailBullets = [
+          ...((parsed.failed_script_details ?? [])
+            .slice(0, 3)
+            .map((detail) =>
+              `Failed script detail: ${detail.path} (${detail.reason}${detail.error_code !== undefined ? `, error ${detail.error_code}` : ''})`
+            )),
+          ...((parsed.failed_scene_details ?? [])
+            .slice(0, 3)
+            .map((detail) =>
+              `Failed scene detail: ${detail.path} (${detail.reason}${detail.error_code !== undefined ? `, error ${detail.error_code}` : ''})`
+            )),
+        ];
         return this.createErrorResponse(
           `Script validation failed for ${parsed.failed_scripts.length} script(s) and ${parsed.failed_scenes.length} scene(s).`,
           [
             ...(parsed.failed_scripts.slice(0, 3).map((path) => `Failed script: ${path}`)),
             ...(parsed.failed_scenes.slice(0, 3).map((path) => `Failed scene: ${path}`)),
+            ...detailBullets,
+            ...(diagnostics.map((line) => `Godot diagnostic: ${line}`)),
             'Fix the reported script or scene parse/load errors in Godot and try again',
           ]
         );

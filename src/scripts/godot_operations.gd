@@ -1276,6 +1276,7 @@ func check_scripts(params: Dictionary) -> void:
     var script_path := String(params.get("script_path", ""))
     var script_paths: Array = []
     var failed_scripts: Array = []
+    var failed_script_details: Array = []
 
     if script_path != "":
         if not script_path.begins_with("res://"):
@@ -1293,14 +1294,24 @@ func check_scripts(params: Dictionary) -> void:
         var loaded := load(path)
         if loaded == null:
             failed_scripts.append(path)
+            failed_script_details.append({
+                "path": path,
+                "reason": "load_returned_null"
+            })
             continue
         if loaded is Script:
             var reload_error := (loaded as Script).reload()
             if reload_error != OK:
                 failed_scripts.append(path)
+                failed_script_details.append({
+                    "path": path,
+                    "reason": "reload_failed",
+                    "error_code": reload_error
+                })
 
     var checked_scenes: Array = []
     var failed_scenes: Array = []
+    var failed_scene_details: Array = []
     if include_scenes:
         _collect_matching_files("res://", PackedStringArray([".tscn"]), checked_scenes)
         checked_scenes.sort()
@@ -1309,19 +1320,29 @@ func check_scripts(params: Dictionary) -> void:
             var packed := load(scene_path)
             if packed == null:
                 failed_scenes.append(scene_path)
+                failed_scene_details.append({
+                    "path": scene_path,
+                    "reason": "load_returned_null"
+                })
                 continue
             if packed is PackedScene:
                 var instance = (packed as PackedScene).instantiate()
                 if instance == null:
                     failed_scenes.append(scene_path)
+                    failed_scene_details.append({
+                        "path": scene_path,
+                        "reason": "instantiate_returned_null"
+                    })
                 elif instance is Node:
                     (instance as Node).free()
 
     var result := {
         "checked_scripts": script_paths,
         "failed_scripts": failed_scripts,
+        "failed_script_details": failed_script_details,
         "checked_scenes": checked_scenes,
-        "failed_scenes": failed_scenes
+        "failed_scenes": failed_scenes,
+        "failed_scene_details": failed_scene_details
     }
     print("__MCP_RESULT__:" + JSON.stringify(result))
 
