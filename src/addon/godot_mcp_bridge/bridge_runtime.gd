@@ -11,6 +11,8 @@ const DEFAULT_PROPERTY_NAMES := [
     "global_scale"
 ]
 const MAX_TREE_NODES := 500
+const CONNECT_RETRY_INTERVAL_MS := 1000
+const SESSION_FILE_PATH := "res://addons/godot_mcp_bridge/session.json"
 
 var _socket := StreamPeerTCP.new()
 var _read_buffer := ""
@@ -18,21 +20,14 @@ var _connected := false
 var _host := ""
 var _port := 0
 var _token := ""
+var _use_environment_settings := false
+var _next_connect_attempt_msec := 0
 
 func _ready() -> void:
     _host = OS.get_environment("GODOT_MCP_LIVE_HOST")
     _token = OS.get_environment("GODOT_MCP_LIVE_TOKEN")
     _port = int(OS.get_environment("GODOT_MCP_LIVE_PORT"))
-
-    if _host == "" or _token == "" or _port <= 0:
-        set_process(false)
-        return
-
-    var error := _socket.connect_to_host(_host, _port)
-    if error != OK:
-        push_warning("Godot MCP bridge failed to connect to host %s:%d" % [_host, _port])
-        set_process(false)
-        return
+    _use_environment_settings = _host != "" and _token != "" and _port > 0
 
     set_process(true)
 
@@ -41,7 +36,12 @@ func _exit_tree() -> void:
         _socket.disconnect_from_host()
 
 func _process(_delta: float) -> void:
+    if _socket.get_status() == StreamPeerTCP.STATUS_NONE:
+        _connected = false
+
     _socket.poll()
+    if _socket.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+        _connected = false
 
     if not _connected and _socket.get_status() == StreamPeerTCP.STATUS_CONNECTED:
         _connected = true
@@ -52,6 +52,7 @@ func _process(_delta: float) -> void:
         })
 
     if _socket.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+        _maybe_connect()
         return
 
     var available := _socket.get_available_bytes()
@@ -74,6 +75,48 @@ func _process(_delta: float) -> void:
             continue
 
         _handle_request(parsed)
+
+func _has_connection_settings() -> bool:
+    return _host != "" and _token != "" and _port > 0
+
+func _maybe_connect() -> void:
+    var now := Time.get_ticks_msec()
+    if now < _next_connect_attempt_msec:
+        return
+
+    _next_connect_attempt_msec = now + CONNECT_RETRY_INTERVAL_MS
+    if not _use_environment_settings:
+        _load_session_settings()
+    if not _has_connection_settings():
+        return
+
+    _socket = StreamPeerTCP.new()
+    var error := _socket.connect_to_host(_host, _port)
+    if error != OK:
+        _connected = false
+
+func _load_session_settings() -> void:
+    if not FileAccess.file_exists(SESSION_FILE_PATH):
+        return
+
+    var file := FileAccess.open(SESSION_FILE_PATH, FileAccess.READ)
+    if file == null:
+        return
+
+    var parsed = JSON.parse_string(file.get_as_text())
+    if typeof(parsed) != TYPE_DICTIONARY:
+        return
+
+    var session := parsed as Dictionary
+    var session_host := String(session.get("host", ""))
+    var session_token := String(session.get("token", ""))
+    var session_port := int(session.get("port", 0))
+    if session_host == "" or session_token == "" or session_port <= 0:
+        return
+
+    _host = session_host
+    _token = session_token
+    _port = session_port
 
 func _handle_request(message: Dictionary) -> void:
     var request_id := String(message.get("request_id", ""))

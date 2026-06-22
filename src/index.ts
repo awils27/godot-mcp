@@ -87,6 +87,7 @@ interface GodotServerConfig {
 class GodotServer {
   private server: Server;
   private activeProcess: GodotProcess | null = null;
+  private managedLiveBridgeHosts = new Map<string, LiveBridgeHost>();
   private godotPath: string | null = null;
   private operationsScriptPath: string;
   private validatedPaths: Map<string, boolean> = new Map();
@@ -488,6 +489,66 @@ class GodotServer {
     writeFileSync(join(projectPath, 'project.godot'), projectConfig, 'utf8');
   }
 
+  private getLiveBridgeSessionFilePath(projectPath: string): string {
+    return join(this.getLiveBridgeProjectDir(projectPath), 'session.json');
+  }
+
+  private writeLiveBridgeSessionFile(projectPath: string, liveBridge: LiveBridgeHost): void {
+    mkdirSync(this.getLiveBridgeProjectDir(projectPath), { recursive: true });
+    writeFileSync(
+      this.getLiveBridgeSessionFilePath(projectPath),
+      JSON.stringify(
+        {
+          host: liveBridge.host,
+          port: liveBridge.port,
+          token: liveBridge.token,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+  }
+
+  private clearLiveBridgeSessionFile(projectPath: string): void {
+    rmSync(this.getLiveBridgeSessionFilePath(projectPath), { force: true });
+  }
+
+  private getProjectLiveBridgeHost(projectPath: string): LiveBridgeHost | null {
+    if (this.activeProcess?.launchArgs.projectPath === projectPath && this.activeProcess.liveBridge) {
+      return this.activeProcess.liveBridge;
+    }
+
+    return this.managedLiveBridgeHosts.get(projectPath) ?? null;
+  }
+
+  private async ensureProjectLiveBridgeHost(projectPath: string): Promise<LiveBridgeHost> {
+    let liveBridge = this.getProjectLiveBridgeHost(projectPath);
+    if (!liveBridge) {
+      liveBridge = new LiveBridgeHost();
+      await liveBridge.start();
+      this.managedLiveBridgeHosts.set(projectPath, liveBridge);
+    }
+
+    this.writeLiveBridgeSessionFile(projectPath, liveBridge);
+    return liveBridge;
+  }
+
+  private async releaseProjectLiveBridgeHost(projectPath: string): Promise<void> {
+    const managedHost = this.managedLiveBridgeHosts.get(projectPath);
+    if (managedHost) {
+      await managedHost.close();
+      this.managedLiveBridgeHosts.delete(projectPath);
+    }
+
+    if (this.activeProcess?.launchArgs.projectPath === projectPath) {
+      this.activeProcess.liveBridge = null;
+    }
+
+    this.clearLiveBridgeSessionFile(projectPath);
+  }
+
   private getLiveBridgeStatusSnapshot(projectPath: string): {
     installed: boolean;
     pluginEnabled: boolean;
@@ -517,12 +578,8 @@ class GodotServer {
       };
     }
 
-    const activeProjectPath = this.activeProcess?.launchArgs.projectPath;
-    if (
-      activeProjectPath === projectPath &&
-      this.activeProcess?.liveBridge &&
-      this.activeProcess.liveBridge.status.connected
-    ) {
+    const liveBridge = this.getProjectLiveBridgeHost(projectPath);
+    if (liveBridge?.status.connected) {
       return {
         installed,
         pluginEnabled,
@@ -603,23 +660,15 @@ class GodotServer {
       };
     }
 
-    if (!this.activeProcess || this.activeProcess.launchArgs.projectPath !== projectPath) {
+    let liveBridge: LiveBridgeHost;
+    try {
+      liveBridge = await this.ensureProjectLiveBridgeHost(projectPath);
+    } catch (error: any) {
       return {
         ok: false,
         response: this.createErrorResponse(
-          'The project is not currently running under MCP control.',
-          ['Use run_project or run_scene after enabling the live bridge addon']
-        ),
-      };
-    }
-
-    const liveBridge = this.activeProcess.liveBridge;
-    if (!liveBridge) {
-      return {
-        ok: false,
-        response: this.createErrorResponse(
-          'Live bridge session is not active for the running project.',
-          ['Restart the project after enabling the live bridge addon']
+          `Failed to prepare the live bridge session: ${error?.message || 'Unknown error'}`,
+          ['Try enable_live_bridge again or verify the project addon files are writable']
         ),
       };
     }
@@ -630,7 +679,11 @@ class GodotServer {
         ok: false,
         response: this.createErrorResponse(
           'Live bridge runtime did not connect in time.',
-          ['Ensure the addon autoload is enabled and the project started normally']
+          [
+            'Ensure the addon autoload is enabled and the project is running',
+            'You can launch the game with run_project/run_scene or press Play from the Godot editor normally',
+            'Poll get_live_bridge_status until the bridge reaches connected_ready',
+          ]
         ),
       };
     }
@@ -643,7 +696,10 @@ class GodotServer {
         ok: false,
         response: this.createErrorResponse(
           `Live bridge request failed: ${error?.message || 'Unknown error'}`,
-          ['Try rerunning the project or reloading the live bridge addon']
+          [
+            'Try rerunning the project or reloading the live bridge addon',
+            'If you launched the game from the editor, stop it and start it again after get_live_bridge_status prepares the session',
+          ]
         ),
       };
     }
@@ -803,10 +859,15 @@ class GodotServer {
     if (this.activeProcess) {
       this.logDebug('Killing active Godot process');
       this.activeProcess.process.kill();
-      if (this.activeProcess.liveBridge) {
-        await this.activeProcess.liveBridge.close();
-      }
       this.activeProcess = null;
+    }
+    for (const [projectPath, liveBridge] of this.managedLiveBridgeHosts.entries()) {
+      try {
+        await liveBridge.close();
+      } finally {
+        this.managedLiveBridgeHosts.delete(projectPath);
+        this.clearLiveBridgeSessionFile(projectPath);
+      }
     }
     if (this.editorProcess) {
       this.logDebug('Killing tracked editor process');
@@ -2126,9 +2187,6 @@ class GodotServer {
       if (this.activeProcess) {
         this.logDebug('Killing existing Godot process before starting a new one');
         this.activeProcess.process.kill();
-        if (this.activeProcess.liveBridge) {
-          await this.activeProcess.liveBridge.close();
-        }
       }
 
       const cmdArgs = ['--log-file', this.makeGodotTempLogPath(), '-d', '--path', args.projectPath];
@@ -2141,8 +2199,7 @@ class GodotServer {
       let liveBridge: LiveBridgeHost | null = null;
       let spawnEnv: NodeJS.ProcessEnv = process.env;
       if (liveBridgeStatus.status !== 'not_installed' && liveBridgeStatus.status !== 'installed_disabled') {
-        liveBridge = new LiveBridgeHost();
-        await liveBridge.start();
+        liveBridge = await this.ensureProjectLiveBridgeHost(args.projectPath);
         spawnEnv = {
           ...process.env,
           GODOT_MCP_LIVE_HOST: liveBridge.host,
@@ -2161,9 +2218,6 @@ class GodotServer {
       childProcess.on('exit', (code: number | null) => {
         this.logDebug(`Godot process exited with code ${code}`);
         if (this.activeProcess && this.activeProcess.process === childProcess) {
-          if (this.activeProcess.liveBridge) {
-            void this.activeProcess.liveBridge.close();
-          }
           this.activeProcess = null;
         }
       });
@@ -2172,9 +2226,6 @@ class GodotServer {
         console.error('Failed to start Godot process:', err);
         this.appendLogLine(errors, 'spawn error', err.message);
         if (this.activeProcess && this.activeProcess.process === childProcess) {
-          if (this.activeProcess.liveBridge) {
-            void this.activeProcess.liveBridge.close();
-          }
           this.activeProcess = null;
         }
       });
@@ -3315,6 +3366,8 @@ class GodotServer {
     );
     this.writeProjectConfig(args.projectPath, projectConfig);
 
+    await this.ensureProjectLiveBridgeHost(args.projectPath);
+
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
       ...this.createSuccessResponse(
@@ -3327,7 +3380,7 @@ class GodotServer {
           2
         ),
         [
-          'Call run_project or run_scene to start a runtime session',
+          'You can now launch the game with run_project/run_scene or press Play from the Godot editor normally',
           'Then call get_live_bridge_status until the bridge reaches connected_ready',
         ]
       ),
@@ -3380,11 +3433,7 @@ class GodotServer {
     );
     this.writeProjectConfig(args.projectPath, projectConfig);
 
-    const activeProcess = this.activeProcess;
-    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge) {
-      await activeProcess.liveBridge.close();
-      activeProcess.liveBridge = null;
-    }
+    await this.releaseProjectLiveBridgeHost(args.projectPath);
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
@@ -3453,11 +3502,7 @@ class GodotServer {
 
     rmSync(this.getLiveBridgeProjectDir(args.projectPath), { recursive: true, force: true });
 
-    const activeProcess = this.activeProcess;
-    if (activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge) {
-      await activeProcess.liveBridge.close();
-      activeProcess.liveBridge = null;
-    }
+    await this.releaseProjectLiveBridgeHost(args.projectPath);
 
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
     return {
@@ -3505,12 +3550,19 @@ class GodotServer {
       );
     }
 
+    let preparedSession = false;
+    const initialStatus = this.getLiveBridgeStatusSnapshot(args.projectPath);
+    if (initialStatus.status !== 'not_installed' && initialStatus.status !== 'installed_disabled') {
+      try {
+        await this.ensureProjectLiveBridgeHost(args.projectPath);
+        preparedSession = true;
+      } catch (error) {
+        this.logDebug(`Failed to prepare live bridge status session for ${args.projectPath}: ${error}`);
+      }
+    }
+
     const status = this.getLiveBridgeStatusSnapshot(args.projectPath);
-    const activeProcess = this.activeProcess;
-    const runtime =
-      activeProcess && activeProcess.launchArgs.projectPath === args.projectPath && activeProcess.liveBridge
-        ? activeProcess.liveBridge.status
-        : null;
+    const runtime = this.getProjectLiveBridgeHost(args.projectPath)?.status ?? null;
 
     return {
       ...this.createSuccessResponse(
@@ -3518,6 +3570,7 @@ class GodotServer {
           {
             ...status,
             runtime,
+            preparedSession,
           },
           null,
           2
@@ -3525,9 +3578,12 @@ class GodotServer {
         status.status === 'not_installed'
           ? ['Call install_live_bridge, then enable_live_bridge, then run_project or run_scene']
           : status.status === 'installed_disabled'
-            ? ['Call enable_live_bridge, then run_project or run_scene']
+            ? ['Call enable_live_bridge, then launch from the editor normally or use run_project/run_scene']
             : status.status === 'enabled_no_runtime_session'
-              ? ['Call run_project or run_scene, then poll get_live_bridge_status until connected_ready']
+              ? [
+                  'Launch the game from the Godot editor normally or use run_project/run_scene',
+                  'Then poll get_live_bridge_status until connected_ready',
+                ]
               : ['Call live inspection tools such as get_live_scene_tree, get_live_script_variables, or capture_runtime_state']
       ),
     };

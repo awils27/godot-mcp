@@ -103,6 +103,7 @@ async function cleanupTempProject(projectPath: string): Promise<void> {
 
 test('live bridge lifecycle tools install, enable, disable, and uninstall cleanly', async () => {
   const projectPath = makeTempProject();
+  const sessionFile = join(projectPath, 'addons', 'godot_mcp_bridge', 'session.json');
 
   try {
     await withClient(async (client) => {
@@ -120,6 +121,17 @@ test('live bridge lifecycle tools install, enable, disable, and uninstall cleanl
       assert.equal(status.pluginEnabled, true);
       assert.equal(status.autoloadEnabled, true);
       assert.equal(status.status, 'enabled_no_runtime_session');
+      assert.equal(existsSync(sessionFile), true);
+
+      const session = JSON.parse(readFileSync(sessionFile, 'utf8')) as {
+        host: string;
+        port: number;
+        token: string;
+      };
+      assert.equal(session.host, '127.0.0.1');
+      assert.equal(typeof session.port, 'number');
+      assert.ok(session.port > 0);
+      assert.match(session.token, /^[0-9a-f-]{36}$/i);
 
       const projectConfig = readFileSync(join(projectPath, 'project.godot'), 'utf8');
       assert.match(projectConfig, /res:\/\/addons\/godot_mcp_bridge\/plugin\.cfg/);
@@ -130,11 +142,35 @@ test('live bridge lifecycle tools install, enable, disable, and uninstall cleanl
       assert.equal(status.pluginEnabled, false);
       assert.equal(status.autoloadEnabled, false);
       assert.equal(status.status, 'installed_disabled');
+      assert.equal(existsSync(sessionFile), false);
 
       status = await callToolJson(client, 'uninstall_live_bridge', { projectPath });
       assert.equal(status.installed, false);
       assert.equal(status.status, 'not_installed');
       assert.equal(existsSync(join(projectPath, 'addons', 'godot_mcp_bridge')), false);
+    });
+  } finally {
+    await cleanupTempProject(projectPath);
+  }
+});
+
+test('get_live_bridge_status prepares a reusable session file for editor-launched runs', async () => {
+  const projectPath = makeTempProject();
+  const sessionFile = join(projectPath, 'addons', 'godot_mcp_bridge', 'session.json');
+
+  try {
+    await withClient(async (client) => {
+      await callToolJson(client, 'install_live_bridge', { projectPath });
+      await callToolJson(client, 'enable_live_bridge', { projectPath });
+
+      rmSync(sessionFile, { force: true });
+      assert.equal(existsSync(sessionFile), false);
+
+      const status = await callToolJson(client, 'get_live_bridge_status', { projectPath });
+      assert.equal(status.installed, true);
+      assert.equal(status.autoloadEnabled, true);
+      assert.equal(status.preparedSession, true);
+      assert.equal(existsSync(sessionFile), true);
     });
   } finally {
     await cleanupTempProject(projectPath);
